@@ -1,0 +1,7 @@
+[package]
+name = "filetest"
+version = "0.1.0"
+authors = ["Zhifei Yang <zhiyang@ethz.ch>"]
+edition = "2018"
+
+[dependencies]
