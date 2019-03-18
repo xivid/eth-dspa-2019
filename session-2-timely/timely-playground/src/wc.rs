@@ -43,7 +43,7 @@ fn main() {
                 .probe_with(&mut probe);
         });
 
-        let path = format!("/home/zhifei/repo/dspa/session-2-timely/input-{}.txt", index);
+        let path = format!("/home/zhifei/repo/dspa/session-2-timely/input/input-{}.txt", index);
         let file = File::open(path).expect("Input data not found in CWD");
         let buffered = BufReader::new(file);
         // send input line-by-line
@@ -52,11 +52,14 @@ fn main() {
             input.send(line.unwrap());
             total_lines = total_lines + 1;
         }
-        // println!("worker #{} sent {} lines", index, total_lines);
+        println!("worker #{} sent {} lines", index, total_lines);
         // advance input and process
         input.advance_to(total_lines);  // total_lines or total_lines + 1?
-        // println!("worker #{} advanced to {}, time now {}", index, total_lines, input.time());
+        println!("worker #{} advanced to {}, time now {}", index, total_lines, input.time());
+        let mut step = 0;
         while probe.less_than(input.time()) {
+            println!("worker #{} takes step {}, input.time() is {}...", index, step, input.time());
+            step += 1;
             worker.step();
         }
     }).unwrap();

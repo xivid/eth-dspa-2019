@@ -1,0 +1,12 @@
+wikiedits/BatchJob.class
+wikiedits/FlinkKafkaConsumer.class
+wikiedits/FlinkKafkaProducer$CustomPartitioner.class
+wikiedits/FlinkKafkaProducer$1.class
+wikiedits/FlinkKafkaConsumer$CustomDeserializationSchema.class
+wikiedits/FlinkKafkaProducer.class
+wikiedits/FlinkKafkaProducer$2.class
+wikiedits/StreamingJob.class
+wikiedits/FlinkKafkaConsumer$3.class
+wikiedits/FlinkKafkaConsumer$1.class
+wikiedits/FlinkKafkaConsumer$2.class
+wikiedits/FlinkKafkaProducer$3.class
