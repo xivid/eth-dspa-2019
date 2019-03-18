@@ -184,7 +184,9 @@ To change the program to read text, send inputs, and perform computation per 5 l
 2. sends the string to the input as a whole,
 3. advances input and processes these lines.
 
-The code is the following. The output is `heyjude_5lines.out` in the appendix. In each round, every worker sends 5 lines (or less when meeting file end) to the input, and then output the counts of the words (in these lines) that it is responsible for.
+The code is the following. The output is `heyjude_5lines.out` in the appendix. In each round, every worker sends 5 lines (or less when meeting file end) to the input, and then output the counts of the words (in these lines) that it is responsible for. The computation is triggered once 5 lines has been sent (instead of having sent all lines), so it enables continuous computation.
+
+Since the files are not updating, a infinite loop does not much sense, but if it is to be replaced by a `TcpStream`, the loop to read lines from the files should also be replaced by a infinite loop that continuously read lines from the stream. If each worker reads from a different stream and a stream is significantly slower than others, this may cause a performance issue because that worker needs to wait for input instead of participating in the aggregating process triggered by others.
 
 ```rust
 extern crate timely;
