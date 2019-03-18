@@ -100,11 +100,13 @@ public class FlinkKafkaConsumer {
 		public WikipediaEditEvent deserialize(byte[] message) {
 			// format:
 			// "WikipediaEditEvent{timestamp=" + this.timestamp + ", channel='" + this.channel + '\'' + ", title='" + this.title + '\'' + ", diffUrl='" + this.diffUrl + '\'' + ", user='" + this.user + '\'' + ", byteDiff=" + this.byteDiff + ", summary='" + this.summary + '\'' + ", flags=" + this.flags + '}';
+			// example:
+			// WikipediaEditEvent{timestamp=1552870599316, channel='#en.wikipedia', title='Talk:Shooting of Trayvon Martin', diffUrl='https://en.wikipedi=888128575', user='Psalm84', byteDiff=-2, summary='/* Proposed split */ minor word changes', flags=33}
+
 			String s = new String(message);
 			Pattern p = Pattern.compile("WikipediaEditEvent\\{timestamp=(.*), channel='(.*)', title='(.*)', diffUrl='(.*)', user='(.*)', byteDiff=(.*), summary='(.*)', flags=(.*)}");
 			Matcher m = p.matcher(s);
-//WikipediaEditEvent{timestamp=1552870599316, channel='#en.wikipedia', title='Talk:Shooting of Trayvon Martin', diffUrl='https://en.wikipedi=888128575', user='Psalm84', byteDiff=-2, summary='/* Proposed split */ minor word changes', flags=33}
-			try {
+			if (m.find()) {
 				int flags = Integer.valueOf(m.group(8));
 				boolean isMinor = (flags & 1) != 0;
 				boolean isNew = (flags & 2) != 0;
@@ -113,13 +115,9 @@ public class FlinkKafkaConsumer {
 				boolean isSpecial = (flags & 16) != 0;
 				boolean isTalk = (flags & 32) != 0;
 
-				WikipediaEditEvent event = new WikipediaEditEvent(Long.valueOf(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5), Integer.valueOf(m.group(6)), m.group(7), isMinor, isNew, isUnpatrolled, isBotEdit, isSpecial, isTalk);
-				if (!event.toString().equals(s)) {
-					throw new RuntimeException("parse error!");
-				}
-				return event;
-			} catch (Exception e) {
-				throw new RuntimeException("error: " + m.group(1) + ", " + m.group(2)  + ", " + m.group(3)  + ", " + m.group(4)  + ", " + m.group(5)  + ", " + m.group(6) + ", " + m.group(7) + ", " + m.group(8)   );
+				return new WikipediaEditEvent(Long.valueOf(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5), Integer.valueOf(m.group(6)), m.group(7), isMinor, isNew, isUnpatrolled, isBotEdit, isSpecial, isTalk);
+			} else {
+				throw new RuntimeException("error in parsing!");
 			}
 		}
 	}
