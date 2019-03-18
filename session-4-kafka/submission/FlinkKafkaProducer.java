@@ -49,7 +49,7 @@ import static org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducerBase
  * <p>If you change the name of the main class (with the public static void main(String[] args))
  * method, change the respective entry in the POM.xml file (simply search for 'mainClass').
  */
-public class WikipediaAnalysis {
+public class FlinkKafkaProducer {
 
 	public static void main(String[] args) throws Exception {
 		// set up the streaming execution environment
@@ -75,7 +75,8 @@ public class WikipediaAnalysis {
 		 */
 		DataStream<WikipediaEditEvent> edits = env.addSource(new WikipediaEditsSource());
 
-		DataStream<String> stream = edits.map((WikipediaEditEvent e) -> new Tuple2<>(e.getUser(), e.getByteDiff()).toString());
+//		DataStream<String> stream = edits.map((WikipediaEditEvent e) -> new Tuple2<>(e.getUser(), e.getByteDiff()).toString());
+		DataStream<String> stream = edits.map(WikipediaEditEvent::toString);
 		FlinkKafkaProducer011<String> myProducer = new FlinkKafkaProducer011<String>(
 				"wiki-edits", // target topic
 				new SimpleStringSchema(),  // serialization schema
@@ -108,7 +109,7 @@ public class WikipediaAnalysis {
 						return e.f1 >= 0;
 					}
 				});
-		result.print();
+//		result.print();
 
 		// execute program
 		env.execute("Flink Streaming Java API Skeleton");
