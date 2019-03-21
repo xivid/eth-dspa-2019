@@ -51,78 +51,78 @@ import static org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducerBase
  */
 public class FlinkKafkaProducer {
 
-	public static void main(String[] args) throws Exception {
-		// set up the streaming execution environment
-		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		/*
-		 * Here, you can start creating your execution plan for Flink.
-		 *
-		 * Start with getting some data from the environment, like
-		 * 	env.readTextFile(textPath);
-		 *
-		 * then, transform the resulting DataStream<String> using operations
-		 * like
-		 * 	.filter()
-		 * 	.flatMap()
-		 * 	.join()
-		 * 	.coGroup()
-		 *
-		 * and many more.
-		 * Have a look at the programming guide for the Java API:
-		 *
-		 * http://flink.apache.org/docs/latest/apis/streaming/index.html
-		 *
-		 */
-		DataStream<WikipediaEditEvent> edits = env.addSource(new WikipediaEditsSource());
+    public static void main(String[] args) throws Exception {
+        // set up the streaming execution environment
+        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        /*
+         * Here, you can start creating your execution plan for Flink.
+         *
+         * Start with getting some data from the environment, like
+         * 	env.readTextFile(textPath);
+         *
+         * then, transform the resulting DataStream<String> using operations
+         * like
+         * 	.filter()
+         * 	.flatMap()
+         * 	.join()
+         * 	.coGroup()
+         *
+         * and many more.
+         * Have a look at the programming guide for the Java API:
+         *
+         * http://flink.apache.org/docs/latest/apis/streaming/index.html
+         *
+         */
+        DataStream<WikipediaEditEvent> edits = env.addSource(new WikipediaEditsSource());
 
 //		DataStream<String> stream = edits.map((WikipediaEditEvent e) -> new Tuple2<>(e.getUser(), e.getByteDiff()).toString());
-		DataStream<String> stream = edits.map(WikipediaEditEvent::toString);
-		FlinkKafkaProducer011<String> myProducer = new FlinkKafkaProducer011<String>(
-				"wiki-edits", // target topic
-				new SimpleStringSchema(),  // serialization schema
-				getPropertiesFromBrokerList("localhost:9092"), // broker list
-				Optional.of(new CustomPartitioner<>()));  // round robin partitioner
-		stream.addSink(myProducer);
+        DataStream<String> stream = edits.map(WikipediaEditEvent::toString);
+        FlinkKafkaProducer011<String> myProducer = new FlinkKafkaProducer011<String>(
+                "wiki-edits", // target topic
+                new SimpleStringSchema(),  // serialization schema
+                getPropertiesFromBrokerList("localhost:9092"), // broker list
+                Optional.of(new CustomPartitioner<>()));  // round robin partitioner
+        stream.addSink(myProducer);
 
-		DataStream<Tuple2<String, Integer>> result = edits
-				// project the event user and the diff
-				.map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
-					@Override
-					public Tuple2<String, Integer> map(WikipediaEditEvent event) {
-						return new Tuple2<>(
-								event.getUser(), event.getByteDiff());
-					}
-				})
-				// group by user
-				.keyBy(0)
-				// aggregate changes per user
-				.reduce(new ReduceFunction<Tuple2<String, Integer>>() {
-					@Override
-					public Tuple2<String, Integer> reduce(Tuple2<String, Integer> e1, Tuple2<String, Integer> e2) {
-						return new Tuple2<>(e1.f0, e1.f1 + e2.f1);
-					}
-				})
-				// filter out negative byte changes
-				.filter(new FilterFunction<Tuple2<String, Integer>>() {
-					@Override
-					public boolean filter(Tuple2<String, Integer> e) throws Exception {
-						return e.f1 >= 0;
-					}
-				});
+        DataStream<Tuple2<String, Integer>> result = edits
+                // project the event user and the diff
+                .map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
+                    @Override
+                    public Tuple2<String, Integer> map(WikipediaEditEvent event) {
+                        return new Tuple2<>(
+                                event.getUser(), event.getByteDiff());
+                    }
+                })
+                // group by user
+                .keyBy(0)
+                // aggregate changes per user
+                .reduce(new ReduceFunction<Tuple2<String, Integer>>() {
+                    @Override
+                    public Tuple2<String, Integer> reduce(Tuple2<String, Integer> e1, Tuple2<String, Integer> e2) {
+                        return new Tuple2<>(e1.f0, e1.f1 + e2.f1);
+                    }
+                })
+                // filter out negative byte changes
+                .filter(new FilterFunction<Tuple2<String, Integer>>() {
+                    @Override
+                    public boolean filter(Tuple2<String, Integer> e) throws Exception {
+                        return e.f1 >= 0;
+                    }
+                });
 //		result.print();
 
-		// execute program
-		env.execute("Flink Streaming Java API Skeleton");
-	}
+        // execute program
+        env.execute("Flink Streaming Java API Skeleton");
+    }
 
-	static class CustomPartitioner<T> extends FlinkKafkaPartitioner<T> {
-		private int next = 0;
+    static class CustomPartitioner<T> extends FlinkKafkaPartitioner<T> {
+        private int next = 0;
 
-		@Override
-		public int partition(T record, byte[] key, byte[] value, String targetTopic, int[] partitions) {
-			Preconditions.checkArgument(partitions != null && partitions.length > 0, "Partitions of the target topic is empty.");
-			this.next = (this.next + 1) % partitions.length;
-			return partitions[this.next];
-		}
-	}
+        @Override
+        public int partition(T record, byte[] key, byte[] value, String targetTopic, int[] partitions) {
+            Preconditions.checkArgument(partitions != null && partitions.length > 0, "Partitions of the target topic is empty.");
+            this.next = (this.next + 1) % partitions.length;
+            return partitions[this.next];
+        }
+    }
 }
