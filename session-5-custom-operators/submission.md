@@ -83,7 +83,7 @@ Further, using generics:
 
 ```rust
 extern crate Num;
-// TODO
+// TODO convert input to f64 and keep everything else
 ```
 
 ## Task 3
