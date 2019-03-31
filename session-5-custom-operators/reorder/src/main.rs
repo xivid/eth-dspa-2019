@@ -5,9 +5,7 @@ use timely::dataflow::operators::{Operator, UnorderedInput, Inspect};
 use timely::dataflow::channels::pact::Pipeline;
 
 fn main() {
-    // 1) Instantiate a computation pipeline by chaining operators
     timely::execute_from_args(std::env::args(), |worker| {
-        // let index = worker.index();
 
         let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
             let (input, stream) = scope.new_unordered_input();
@@ -19,9 +17,8 @@ fn main() {
                              .or_insert(Vec::new())
                              .push(data.replace(Vec::new()));
                         barrier.notify_at(time.retain());
-                        // output.session(&time).give(data);
                     }
-                    // ... except print out when each time completes.
+                    // when notified
                     while let Some((time, count)) = barrier.next() {
                         println!("time {:?} complete with count {:?}!", time, count);
                         let mut session = output.session(&time);

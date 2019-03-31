@@ -93,8 +93,71 @@ First, in each epoch, the tuples should be uniformly distributed among all worke
 
 ## Task 4
 
-`reorder` operator
+A HashMap is used to stash data. The data is not emitted until the notification of its epoch.
 
+```rust
+extern crate timely;
+
+use std::collections::HashMap;
+use timely::dataflow::operators::{Operator, UnorderedInput, Inspect};
+use timely::dataflow::channels::pact::Pipeline;
+
+fn main() {
+    timely::execute_from_args(std::env::args(), |worker| {
+
+        let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
+            let (input, stream) = scope.new_unordered_input();
+            let mut stash = HashMap::new();
+
+            stream.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
+                    while let Some((time, data)) = input.next() {
+                        stash.entry(time.time().clone())
+                             .or_insert(Vec::new())
+                             .push(data.replace(Vec::new()));
+                        barrier.notify_at(time.retain());
+                    }
+                    // when notified
+                    while let Some((time, count)) = barrier.next() {
+                        println!("time {:?} complete with count {:?}!", time, count);
+                        let mut session = output.session(&time);
+                        if let Some(list) = stash.remove(time.time()) {
+                            for mut vector in list.into_iter() {
+                                session.give_vec(&mut vector);
+                            }
+                        }
+                    }
+                }).inspect_batch(move |epoch, data| {
+                    for d in data {
+                        println!("@t={} | seen: {:?}", epoch, d);
+                    }
+                });
+            input // returns a pair (input::UnorderedHandle, Capability)
+        });
+        
+        // Generate out-of-order inputs
+        input.session(cap.delayed(&2)).give('B');
+        input.session(cap.delayed(&1)).give('A');
+        input.session(cap.delayed(&2)).give('b');
+        input.session(cap.delayed(&3)).give('C');
+        input.session(cap.delayed(&3)).give('c');
+        input.session(cap.delayed(&1)).give('a');
+
+    }).unwrap();
+}
+```
+
+The output is:
+```
+time Capability { time: 1, internal: ... } complete with count 1!
+time Capability { time: 2, internal: ... } complete with count 1!
+time Capability { time: 3, internal: ... } complete with count 1!
+@t=1 | seen: 'A'
+@t=1 | seen: 'a'
+@t=2 | seen: 'B'
+@t=2 | seen: 'b'
+@t=3 | seen: 'C'
+@t=3 | seen: 'c'
+```
 
 ## Task 5
 
