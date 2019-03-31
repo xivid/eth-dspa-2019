@@ -42,7 +42,7 @@ fn main() {
 }
 ```
 
-Formulating it as a reusable operator:
+To formulate it as a reusable operator:
 
 ```rust
 trait Average<G: Scope> {
@@ -50,21 +50,40 @@ trait Average<G: Scope> {
 }
 impl<G: Scope> Average<G> for Stream<G, u64> {
     fn average(&self) -> Stream<G, (u64, f64)> {
-    // ... (to be filled in) …
+       let mut vector = Vec::new();
+       let mut sum = 0.0;
+       let mut count = 0.0;
+       self.unary(Pipeline, "Average", move |_, _| move |input, output| {
+           input.for_each(|time, data| {
+               data.swap(&mut vector);
+               for datum in vector.drain(..) {
+                   sum += datum as f64;
+                   count += 1.0;
+                   output.session(&time).give((datum, sum / count));
+               }
+           });
+       })
     }
 }
 ```
 
-and changes that need to be made within my code is:
+We need to add `use timely::dataflow::{Stream, Scope};` in the head, and the main function becomes:
 
 ```rust
-// TODO
+fn main() {
+    timely::example(|scope| {
+        let input = (0..10).to_stream(scope);
+        input.average()
+             .inspect(|x| println!("seen: {:?}", x));
+    });
+}
 ```
 
 Further, using generics:
 
 ```rust
 extern crate Num;
+// TODO
 ```
 
 ## Task 3
