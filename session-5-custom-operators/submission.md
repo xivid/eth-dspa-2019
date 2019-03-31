@@ -88,7 +88,7 @@ extern crate Num;
 
 ## Task 3
 
-To emit the average once per epoch while taking best advantage of worker parallelism, we can ...
+First, in each epoch, the tuples should be uniformly distributed among all workers so that the advantage of worker parallism is taken at the best, and each worker handles a part of the tuples. The partitioning strategy should be as equal among workers as possible, for example, in a round-robin manner. Secondly, the operator should maintain two worker-local aggregate states `sum` and `count` for the tuples it received within one epoch. After one epoch is finished, there should be another stage to accumulate `sum` and `count` from all workers to one "master" worker, and this worker finally outputs the global average of this epoch.
 
 
 ## Task 4
