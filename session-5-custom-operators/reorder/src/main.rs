@@ -11,8 +11,7 @@ trait Reorder<G: Scope, D: Data> {
 }
 impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
     fn reorder(&self) -> Stream<G, D> {
-        let mut stash = HashMap::new();
-       
+        let mut stash = HashMap::new();     
         self.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
             while let Some((time, data)) = input.next() {
                 stash.entry(time.time().clone())
@@ -35,14 +34,9 @@ impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
 }
 
 fn main() {
-    // 1) Instantiate a computation pipeline by chaining operators
     timely::execute_from_args(std::env::args(), |worker| {
-        // let index = worker.index();
-
         let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
             let (input, stream) = scope.new_unordered_input();
-            let mut stash = HashMap::new();
-
             stream
                 .reorder()
                 .inspect_batch(move |epoch, data| {
