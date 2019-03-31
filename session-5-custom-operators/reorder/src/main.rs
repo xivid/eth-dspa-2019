@@ -3,6 +3,36 @@ extern crate timely;
 use std::collections::HashMap;
 use timely::dataflow::operators::{Operator, UnorderedInput, Inspect};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::Data;
+use timely::dataflow::{Stream, Scope};
+
+trait Reorder<G: Scope, D: Data> {
+    fn reorder(&self) -> Stream<G, D>;
+}
+impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
+    fn reorder(&self) -> Stream<G, D> {
+        let mut stash = HashMap::new();
+       
+        self.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
+            while let Some((time, data)) = input.next() {
+                stash.entry(time.time().clone())
+                        .or_insert(Vec::new())
+                        .push(data.replace(Vec::new()));
+                barrier.notify_at(time.retain());
+            }
+            // when notified
+            while let Some((time, count)) = barrier.next() {
+                println!("time {:?} complete with count {:?}!", time, count);
+                let mut session = output.session(&time);
+                if let Some(list) = stash.remove(time.time()) {
+                    for mut vector in list.into_iter() {
+                        session.give_vec(&mut vector);
+                    }
+                }
+            }
+        })
+    }
+}
 
 fn main() {
     // 1) Instantiate a computation pipeline by chaining operators
@@ -13,25 +43,9 @@ fn main() {
             let (input, stream) = scope.new_unordered_input();
             let mut stash = HashMap::new();
 
-            stream.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
-                    while let Some((time, data)) = input.next() {
-                        stash.entry(time.time().clone())
-                             .or_insert(Vec::new())
-                             .push(data.replace(Vec::new()));
-                        barrier.notify_at(time.retain());
-                        // output.session(&time).give(data);
-                    }
-                    // ... except print out when each time completes.
-                    while let Some((time, count)) = barrier.next() {
-                        println!("time {:?} complete with count {:?}!", time, count);
-                        let mut session = output.session(&time);
-                        if let Some(list) = stash.remove(time.time()) {
-                            for mut vector in list.into_iter() {
-                                session.give_vec(&mut vector);
-                            }
-                        }
-                    }
-                }).inspect_batch(move |epoch, data| {
+            stream
+                .reorder()
+                .inspect_batch(move |epoch, data| {
                     for d in data {
                         println!("@t={} | seen: {:?}", epoch, d);
                     }
