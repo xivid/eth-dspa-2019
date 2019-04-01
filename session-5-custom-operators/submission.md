@@ -93,7 +93,7 @@ First, in each epoch, the tuples should be uniformly distributed among all worke
 
 ## Task 4
 
-A HashMap is used to stash data. The data is not emitted until the notification of its epoch.
+A HashMap is used to stash data. The data is not emitted until the notification of the completion of its epoch.
 
 ```rust
 extern crate timely;
@@ -101,32 +101,43 @@ extern crate timely;
 use std::collections::HashMap;
 use timely::dataflow::operators::{Operator, UnorderedInput, Inspect};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::Data;
+use timely::dataflow::{Stream, Scope};
+
+trait Reorder<G: Scope, D: Data> {
+    fn reorder(&self) -> Stream<G, D>;
+}
+impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
+    fn reorder(&self) -> Stream<G, D> {
+        let mut stash = HashMap::new();
+        self.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
+            while let Some((time, data)) = input.next() {
+                stash.entry(time.time().clone())
+                        .or_insert(Vec::new())
+                        .push(data.replace(Vec::new()));
+                barrier.notify_at(time.retain());
+            }
+            // when notified
+            while let Some((time, count)) = barrier.next() {
+                println!("time {:?} complete with count {:?}!", time, count);
+                let mut session = output.session(&time);
+                if let Some(list) = stash.remove(time.time()) {
+                    for mut vector in list.into_iter() {
+                        session.give_vec(&mut vector);
+                    }
+                }
+            }
+        })
+    }
+}
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
-
         let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
             let (input, stream) = scope.new_unordered_input();
-            let mut stash = HashMap::new();
-
-            stream.unary_notify(Pipeline, "Reorder", vec![], move |input, output, barrier| {
-                    while let Some((time, data)) = input.next() {
-                        stash.entry(time.time().clone())
-                             .or_insert(Vec::new())
-                             .push(data.replace(Vec::new()));
-                        barrier.notify_at(time.retain());
-                    }
-                    // when notified
-                    while let Some((time, count)) = barrier.next() {
-                        println!("time {:?} complete with count {:?}!", time, count);
-                        let mut session = output.session(&time);
-                        if let Some(list) = stash.remove(time.time()) {
-                            for mut vector in list.into_iter() {
-                                session.give_vec(&mut vector);
-                            }
-                        }
-                    }
-                }).inspect_batch(move |epoch, data| {
+            stream
+                .reorder()
+                .inspect_batch(move |epoch, data| {
                     for d in data {
                         println!("@t={} | seen: {:?}", epoch, d);
                     }
@@ -142,6 +153,8 @@ fn main() {
         input.session(cap.delayed(&3)).give('c');
         input.session(cap.delayed(&1)).give('a');
 
+        drop(input);
+        drop(cap);
     }).unwrap();
 }
 ```

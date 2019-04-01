@@ -55,5 +55,7 @@ fn main() {
         input.session(cap.delayed(&3)).give('c');
         input.session(cap.delayed(&1)).give('a');
 
+        drop(input);
+        drop(cap);
     }).unwrap();
 }
