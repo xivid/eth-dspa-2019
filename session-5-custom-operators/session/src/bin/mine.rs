@@ -37,9 +37,10 @@ impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
                              .push((time.time().clone(), user_interaction.clone()));  // TODO: don't copy
                         // remove old closing time if it's within `epoch_timeout`
                         if let Some(closing_time) = session_id_to_closing_time.get(&session_id) {
-                            if time.time() - closing_time > epoch_timeout {
+                            if time.time() < closing_time {
+                                // this session_id is no longer supposed to close at this closing_time
                                 if let Some(session_ids) = closing_time_to_session_ids.get_mut(closing_time) {
-                                    session_ids.retain(|&x| x != session_id); // .remove(session_id);
+                                    session_ids.retain(|&x| x != session_id); // remove session_id from session_ids
                                 }
                             }
                         }
