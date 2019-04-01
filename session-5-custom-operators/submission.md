@@ -2,7 +2,7 @@
 
 ## Task 1
 
-In the dataflow model, in contrast to batch processing, data is processed in a **pipeline** of operators. If states are arbitrarily shared across the pipeline, a possible problem is that as soon as an upstream operator updates a shared state, a downstream operator will observe the new value immediately, even if the upstream operator is not meant to let the downstream operator consume the new value. 
+In the dataflow model, in contrast to batch processing, data is processed in a **pipeline** of operators, this can cause a problem of *Stream synchronisation*. If states are arbitrarily shared across the pipeline, a possible problem is that as soon as an upstream operator updates a shared state, a downstream operator will observe the new value immediately, even if the upstream operator is not meant to let the downstream operator consume the new value. 
 
 In our example, when the third `map` operator attempts to calculate the running average for all items until `x`, it is very likely that both `sum` and `count` have been updated by the other `map` operators which have received later items.
 
@@ -23,10 +23,9 @@ fn main() {
         let mut count = 0.0;
 
         let input = (0..10).to_stream(scope);
-        input.unary(Pipeline, "Average", move |_, _| {
-                let mut vector = Vec::new();
-                move |input, output| {
+        input.unary(Pipeline, "Average", move |_, _| move |input, output| {
                     input.for_each(|time, data| {
+                        let mut vector = Vec::new();  // give back a new vector to Timely
                         data.swap(&mut vector);
                         let mut session = output.session(&time);
                         for datum in vector.drain(..) {
@@ -50,11 +49,11 @@ trait Average<G: Scope> {
 }
 impl<G: Scope> Average<G> for Stream<G, u64> {
     fn average(&self) -> Stream<G, (u64, f64)> {
-       let mut vector = Vec::new();
        let mut sum = 0.0;
        let mut count = 0.0;
        self.unary(Pipeline, "Average", move |_, _| move |input, output| {
            input.for_each(|time, data| {
+               let mut vector = Vec::new();
                data.swap(&mut vector);
                for datum in vector.drain(..) {
                    sum += datum as f64;
@@ -133,7 +132,7 @@ impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
-        let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
+        let (mut input, cap) = worker.dataflow::<usize, _, _>(|scope| {
             let (input, stream) = scope.new_unordered_input();
             stream
                 .reorder()
@@ -152,9 +151,6 @@ fn main() {
         input.session(cap.delayed(&3)).give('C');
         input.session(cap.delayed(&3)).give('c');
         input.session(cap.delayed(&1)).give('a');
-
-        drop(input);
-        drop(cap);
     }).unwrap();
 }
 ```
@@ -175,3 +171,4 @@ time Capability { time: 3, internal: ... } complete with count 1!
 ## Task 5
 
 session window
+        // Exchange::new(|(session_id, _)| *session_id)

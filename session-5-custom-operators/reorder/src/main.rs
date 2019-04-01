@@ -35,7 +35,7 @@ impl<G: Scope, D: Data> Reorder<G, D> for Stream<G, D> {
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
-        let (mut input, mut cap) = worker.dataflow::<usize, _, _>(|scope| {
+        let (mut input, cap) = worker.dataflow::<usize, _, _>(|scope| {
             let (input, stream) = scope.new_unordered_input();
             stream
                 .reorder()
@@ -54,8 +54,5 @@ fn main() {
         input.session(cap.delayed(&3)).give('C');
         input.session(cap.delayed(&3)).give('c');
         input.session(cap.delayed(&1)).give('a');
-
-        drop(input);
-        drop(cap);
     }).unwrap();
 }

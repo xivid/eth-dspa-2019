@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 timely = "0.8"
+num-traits = "0.2"
