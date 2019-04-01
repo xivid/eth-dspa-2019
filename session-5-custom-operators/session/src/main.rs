@@ -20,21 +20,21 @@ trait SessionWindow<G: Scope> {
 
 impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
     fn sessionize(&self, epoch_timeout: usize) -> Stream<G, (char, Vec<Action>)> {
-        let mut stash = HashMap::new();  // session_id -> list of (timestamp, action)
-        let mut closing_time_to_session_ids: HashMap<_, Vec<char>> = HashMap::new();  // session closure time -> list of closing session id(s)
-        let mut session_id_to_closing_time: HashMap<char, usize> = HashMap::new();  // session id -> session closure time
-
+      
         self.unary_frontier(Pipeline, "SessionWindow", |cap, _info| {
             let mut vector = Vec::new();
             let mut notificator = FrontierNotificator::new();
-            
+            let mut stash: HashMap<char, Vec<(usize, Action)>> = HashMap::new();  // session_id -> list of (timestamp, action)
+            let mut closing_time_to_session_ids: HashMap<_, Vec<char>> = HashMap::new();  // session closure time -> list of closing session id(s)
+            let mut session_id_to_closing_time: HashMap<char, usize> = HashMap::new();  // session id -> session closure time
+      
             move |input, output| {
                 while let Some((time, data)) = input.next() {
                     data.swap(&mut vector);
                     for (session_id, user_interaction) in vector.drain(..) {
                         stash.entry(session_id.clone())
                              .or_insert(Vec::new())
-                             .push((time.time(), user_interaction.clone()));  // TODO: don't copy
+                             .push((time.time().clone(), user_interaction.clone()));  // TODO: don't copy
                         // remove old closing time if it's within `epoch_timeout`
                         if let Some(closing_time) = session_id_to_closing_time.get(&session_id) {
                             if time.time() - closing_time > epoch_timeout {
@@ -51,33 +51,34 @@ impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
                                                    .or_insert(Vec::new())
                                                    .push(session_id);
                         notificator.notify_at(cap.delayed(&notification_time));
-                        println!("session {:?} received {:?}, to be notified at {:?} (closing time {:?})", session_id, user_interaction, notification_time, session_id_to_closing_time.get(&session_id));
+                        // println!("session {:?} received {:?}, to be notified at {:?} (closing time {:?})", session_id, user_interaction, notification_time, session_id_to_closing_time.get(&session_id));
                     }
                 };
                 
                 notificator.for_each(&[input.frontier()], |time, _notificator| {
-                    println!("time {:?} complete! Sending out {:?}", time, closing_time_to_session_ids.get(time.time()));
-                    let mut session = output.session(&time);
+                    // println!("time {:?} complete! sessions timeout {:?}", time, closing_time_to_session_ids.get(time.time()));
                     // get all session ids to be closed at this timestamp
                     if let Some(session_ids) = closing_time_to_session_ids.remove(time.time()) {
                         for session_id in session_ids.into_iter() {
                             // get actions of this session
                             if let Some(actions) = stash.get_mut(&session_id) {                                
-                                // let list = actions.drain_filter(|&(timestamp, action)| time.time() - timestamp >= epoch_timeout).map(|(timestamp, action)| action).collect::<Vec<_>>();
                                 let mut i = 0;
                                 let mut list = Vec::new();
-                                let check = |&(timestamp, _)| time.time() - timestamp >= epoch_timeout;
                                 while i != actions.len() {
-                                    let pair = actions[i];
-                                    if check(&mut actions[i]) {
+                                    if time.time() >= &(actions[i].0 + epoch_timeout) {
                                         let val = actions.remove(i);
+                                        // println!("push {:?} from time {:?}", val.1, val.0);
                                         list.push(val.1);
                                     } else {
                                         i += 1;
                                     }
                                 }
-                                println!("Giving {:?}: {:?}", session_id, list);
-                                session.give((session_id, list));
+                                if actions.len() == 0 {
+                                    // println!("session {:?} emptied", session_id);
+                                    stash.remove(&session_id);
+                                }
+                                // println!("Giving {:?}: {:?}", session_id, list);
+                                output.session(&time).give((session_id, list));
                             }
                         }
                     }
