@@ -21,7 +21,7 @@ trait SessionWindow<G: Scope> {
 impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
     fn sessionize(&self, epoch_timeout: usize) -> Stream<G, (char, Vec<Action>)> {
       
-        self.unary_frontier(Pipeline, "SessionWindow", |cap, _info| {
+        self.unary_frontier(Pipeline, "SessionWindow", |_cap, _info| {
             let mut vector = Vec::new();
             let mut notificator = FrontierNotificator::new();
             let mut stash: HashMap<char, Vec<(usize, Action)>> = HashMap::new();  // session_id -> list of (timestamp, action)
@@ -34,10 +34,10 @@ impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
                     for (session_id, user_interaction) in vector.drain(..) {
                         stash.entry(session_id.clone())
                              .or_insert(Vec::new())
-                             .push((time.time().clone(), user_interaction.clone()));  // TODO: don't copy
+                             .push((*time.time(), user_interaction));
                         // remove old closing time if it's within `epoch_timeout`
                         if let Some(closing_time) = session_id_to_closing_time.get(&session_id) {
-                            if time.time() < closing_time {
+                            if *time.time() < *closing_time {
                                 // this session_id is no longer supposed to close at this closing_time
                                 if let Some(session_ids) = closing_time_to_session_ids.get_mut(closing_time) {
                                     session_ids.retain(|&x| x != session_id); // remove session_id from session_ids
@@ -45,13 +45,13 @@ impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
                             }
                         }
                         // update closing time
-                        let notification_time = time.time() + epoch_timeout;
+                        let notification_time = *time.time() + epoch_timeout;
                         let entry = session_id_to_closing_time.entry(session_id).or_insert(notification_time);
                         *entry = notification_time;
                         closing_time_to_session_ids.entry(notification_time)
                                                    .or_insert(Vec::new())
                                                    .push(session_id);
-                        notificator.notify_at(cap.delayed(&notification_time));
+                        notificator.notify_at(time.delayed(&notification_time));
                         // println!("session {:?} received {:?}, to be notified at {:?} (closing time {:?})", session_id, user_interaction, notification_time, session_id_to_closing_time.get(&session_id));
                     }
                 };
@@ -66,7 +66,7 @@ impl<G: Scope<Timestamp=usize>> SessionWindow<G> for Stream<G, (char, Action)> {
                                 let mut i = 0;
                                 let mut list = Vec::new();
                                 while i != actions.len() {
-                                    if time.time() >= &(actions[i].0 + epoch_timeout) {
+                                    if *time.time() >= actions[i].0 + epoch_timeout {
                                         let val = actions.remove(i);
                                         // println!("push {:?} from time {:?}", val.1, val.0);
                                         list.push(val.1);
