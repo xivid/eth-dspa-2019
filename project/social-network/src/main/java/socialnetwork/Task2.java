@@ -19,15 +19,21 @@
 package socialnetwork;
 
 import akka.stream.impl.fusing.Collect;
-import org.apache.flink.api.common.functions.FlatMapFunction;
-import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.functions.ReduceFunction;
+import org.apache.flink.api.common.functions.*;
+import org.apache.flink.api.common.operators.Keys;
+import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.java.tuple.Tuple;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 
 import java.time.LocalDateTime;
@@ -37,40 +43,89 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Skeleton for a Flink Streaming Job.
- *
- * <p>For a tutorial how to write a Flink streaming application, check the
- * tutorials and examples on the <a href="http://flink.apache.org/docs/stable/">Flink Website</a>.
- *
- * <p>To package your application into a JAR file for execution, run
- * 'mvn clean package' on the command line.
- *
- * <p>If you change the name of the main class (with the public static void main(String[] args))
- * method, change the respective entry in the POM.xml file (simply search for 'mainClass').
- */
 public class Task2 {
 
 	public static void main(String[] args) throws Exception {
 		// set up the streaming execution environment
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-		env.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime);
+		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
-		DataStream<Activity> input = env.readTextFile("/Users/zhifei/repo/eth-dspa-2019/project/data/task2.txt")
-										.map(Activity::new)
-										.assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Time.minutes(30)) {
-											public long extractTimestamp(Activity a) {
-												return a.timestamp;
-											}
-										});
+		DataStream<Activity> input =
+			env.readTextFile("/Users/zhifei/repo/eth-dspa-2019/project/data/task2.txt")
+			   .map(Activity::new)
+			   .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Time.minutes(30)) {
+				   public long extractTimestamp(Activity a) {
+					   return a.timestamp;
+				   }
+			   });
 
-		input
+		input.keyBy(new KeySelector<Activity, Tuple2<Long, Long>>() {
+						@Override
+						public Tuple2<Long, Long> getKey(Activity value) throws Exception {
+							return Tuple2.of(value.postId, value.userId);
+						}
+				    })
+			 .window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
+//			 .fold("\n\n", new FoldFunction<Activity, String>() {
+//					public String fold(String acc, Activity value) {
+//						return acc + value;
+//					}
+//				})
+			 .aggregate(new CountAggregate(), new CountProcessWindowFunction())
 			 .print();
 
 		// execute program
 		env.execute("Task 2 Friend Recommendation");
 	}
+
+	private static class CountAggregate
+			implements AggregateFunction<Activity, Long, Long> {
+		@Override
+		public Long createAccumulator() {
+			return 0L;
+		}
+
+		@Override
+		public Long add(Activity a, Long accumulator) {
+			return accumulator + 1L;
+		}
+
+		@Override
+		public Long getResult(Long accumulator) {
+			return accumulator;
+		}
+
+		@Override
+		public Long merge(Long a, Long b) {
+			return a + b;
+		}
+	}
+
+
+	private static class CountProcessWindowFunction
+			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
+
+		public void process(Tuple2<Long, Long> key,
+							Context context,
+							Iterable<Long> counts,
+							Collector<Tuple3<Long, Long, Long>> out) {
+			Long count = counts.iterator().next();
+			out.collect(new Tuple3<>(key.f0, key.f1, count));
+		}
+	}
+//
+//	private static class CountProcessWindowFunction
+//			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
+//
+//		public void process(Tuple2<Long, Long> keys,
+//							Context context,
+//							Iterable<Long> counts,
+//							Collector<Tuple3<Long, Long, Long>> out) {
+//			Long count = counts.iterator().next();
+//			out.collect(new Tuple3<>(keys.f0, keys.f1, count));
+//		}
+//	}
 
 	// Data type for Activities
 	public static class Activity {
@@ -90,10 +145,10 @@ public class Task2 {
 		};
 
 		public ActivityType type;
-		public long postId;
-		public long userId;
+		public Long postId;
+		public Long userId;
 		public LocalDateTime eventTime;
-		public long timestamp;
+		public Long timestamp;
 
 		public Activity(String line) {
 			String[] splits = line.split(",");
