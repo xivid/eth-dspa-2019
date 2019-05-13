@@ -18,11 +18,14 @@
 
 package socialnetwork;
 
+import org.apache.flink.api.common.functions.AggregateFunction;
+import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
+import org.apache.flink.streaming.api.functions.windowing.ProcessAllWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
@@ -32,9 +35,11 @@ import org.apache.flink.util.Collector;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import static java.util.Arrays.asList;
 
 public class Task2 {
 
@@ -45,10 +50,11 @@ public class Task2 {
 		// config
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		final Time outOfOrdernessBound = Time.minutes(30);
-		final Long[] eigenUserIds = new Long[] {10000L, 10001L};
+		final Long[] eigenUserIds = new Long[] {10000L, 10001L};  // TODO get from config
+		final ArrayList<HashMap<Long, Boolean>> isFriend = new ArrayList<>(); // TODO read from person_knows_person.csv
 
 		// get input
-		DataStream<Activity> input =
+		DataStream<Activity> input =  // TODO get unioned, postId-resolved stream
 			env.readTextFile("/Users/zhifei/repo/eth-dspa-2019/project/data/task2.txt")
 			   .map(Activity::new)
 			   .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(outOfOrdernessBound) {
@@ -61,17 +67,17 @@ public class Task2 {
 		DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = input
 			.keyBy(activity -> activity.postId)
 			.window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
-			.process(new GetUserSimilarities(eigenUserIds));  // TODO: change this to fold
+			.process(new GetUserSimilarities(eigenUserIds));  // TODO: change this to aggregate
 
-		similaritiesPerPost.print();
+//		similaritiesPerPost.print().setParallelism(1);
 
 		// Use consecutive windowed operations
 		// https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/operators/windows.html#consecutive-windowed-operations
-//
-//		DataStream<ArrayList<HashMap<Long, Integer>>> globalSimilarities = similaritiesPerPost
-//				.windowAll(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
-//				.
-//			.print();
+		DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
+				.windowAll(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
+				.aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(eigenUserIds));
+
+		recommendations.print().setParallelism(1);
 
 		// execute program
 		env.execute("Task 2 Friend Recommendation");
@@ -93,7 +99,7 @@ public class Task2 {
 				similarities.add(map);
 			}
 
-			// count activities for every user (TODO: this can be done by `fold`)
+			// count activities for every user (TODO: this can be done by `aggregate`)
 			HashMap<Long, Integer> counts = new HashMap<>();  // userId -> num of activities on this post
 			for (Activity activity: input) {
 				counts.merge(activity.userId, 1, Integer::sum);
@@ -103,10 +109,10 @@ public class Task2 {
 			for (int i = 0; i < eigenUserIds.length; ++i) {
 				Integer eigenCount = counts.get(eigenUserIds[i]);
 				if (eigenCount != null) {
-					for (HashMap.Entry elem : counts.entrySet()) {
-						Long userId = (Long) elem.getKey();
-						Integer userCount = (Integer) elem.getValue();
-						similarities.get(i).put(userId, eigenCount * userCount);
+					for (HashMap.Entry<Long, Integer> elem : counts.entrySet()) {
+						Long userId = elem.getKey();
+						Integer userCount = elem.getValue();
+						similarities.get(i).put(userId, eigenCount * userCount);  // if self or friend: put -1
 					}
 				}
 			}
@@ -115,54 +121,68 @@ public class Task2 {
 			out.collect(similarities);
 		}
 	}
-//	private static class CountAggregate
-//			implements AggregateFunction<Activity, Long, Long> {
-//		@Override
-//		public Long createAccumulator() {
-//			return 0L;
-//		}
-//
-//		@Override
-//		public Long add(Activity a, Long accumulator) {
-//			return accumulator + 1L;
-//		}
-//
-//		@Override
-//		public Long getResult(Long accumulator) {
-//			return accumulator;
-//		}
-//
-//		@Override
-//		public Long merge(Long a, Long b) {
-//			return a + b;
-//		}
-//	}
-//
-//
-//	private static class CountProcessWindowFunction
-//			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
-//
-//		public void process(Tuple2<Long, Long> key,
-//							Context context,
-//							Iterable<Long> counts,
-//							Collector<Tuple3<Long, Long, Long>> out) {
-//			Long count = counts.iterator().next();
-//			out.collect(new Tuple3<>(key.f0, key.f1, count));
-//		}
-//	}
 
-//
-//	private static class CountProcessWindowFunction
-//			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
-//
-//		public void process(Tuple2<Long, Long> keys,
-//							Context context,
-//							Iterable<Long> counts,
-//							Collector<Tuple3<Long, Long, Long>> out) {
-//			Long count = counts.iterator().next();
-//			out.collect(new Tuple3<>(keys.f0, keys.f1, count));
-//		}
-//	}
+
+	private static class SimilarityAggregate
+			implements AggregateFunction<ArrayList<HashMap<Long, Integer>>, ArrayList<HashMap<Long, Integer>>, ArrayList<HashMap<Long, Integer>>> {
+		@Override
+		public ArrayList<HashMap<Long, Integer>> createAccumulator() {
+			return new ArrayList<>();
+		}
+
+		@Override
+		public ArrayList<HashMap<Long, Integer>> add(ArrayList<HashMap<Long, Integer>> value, ArrayList<HashMap<Long, Integer>> accumulator) {
+			assert value.size() == accumulator.size();
+			for (int i = 0; i < accumulator.size(); ++i) {
+				for (HashMap.Entry<Long, Integer> elem : value.get(i).entrySet()) {
+					accumulator.get(i).merge(elem.getKey(), elem.getValue(), Integer::sum);
+				}
+			}
+			return accumulator;
+		}
+
+		@Override
+		public ArrayList<HashMap<Long, Integer>> getResult(ArrayList<HashMap<Long, Integer>> accumulator) {
+			return accumulator;
+		}
+
+		@Override
+		public ArrayList<HashMap<Long, Integer>> merge(ArrayList<HashMap<Long, Integer>> r1, ArrayList<HashMap<Long, Integer>> r2) {
+			return add(r1, r2);
+		}
+	}
+
+	private static class GetTopFiveRecommendations
+			extends ProcessAllWindowFunction<ArrayList<HashMap<Long, Integer>>, ArrayList<ArrayList<Long>>, TimeWindow> {
+
+
+		private Long[] eigenUserIds;
+
+		public GetTopFiveRecommendations(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+
+		public void process(Context context,
+							Iterable<ArrayList<HashMap<Long, Integer>>> aggregations,
+							Collector<ArrayList<ArrayList<Long>>> out) {
+
+			ArrayList<HashMap<Long, Integer>> similarities = aggregations.iterator().next();
+			ArrayList<ArrayList<Long>> recommendations = new ArrayList<>();
+
+//			System.out.println("similarities.size() = " + similarities.size());
+			// why this size is 0?
+			for (int i = 0; i < similarities.size(); i++) {
+				ArrayList<Long> recommendationsPerUser = new ArrayList<>();
+				int c = 0;
+				for (HashMap.Entry<Long, Integer> elem : similarities.get(i).entrySet()) {
+					recommendationsPerUser.add(elem.getKey());  // TODO select 5 with max similarity, and add static measure
+					if (++c == 5) break;
+				}
+				recommendations.add(recommendationsPerUser);
+				System.out.println("Window: " + context.window() + ", recommend for " + eigenUserIds[i] + ": " + recommendationsPerUser);
+			}
+
+			out.collect(recommendations);
+		}
+	}
 
 	// Data type for Activities
 	public static class Activity {
@@ -203,65 +223,4 @@ public class Task2 {
 		}
 	}
 
-//	public static void main(String[] args) throws Exception {
-//
-//		// the port to connect to
-//		final int port;
-//		try {
-//			final ParameterTool params = ParameterTool.fromArgs(args);
-//			port = params.getInt("port");
-//		} catch (Exception e) {
-//			System.err.println("No port specified. Please run 'SocketWindowWordCount --port <port>'");
-//			return;
-//		}
-//
-//		// get the execution environment
-//		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-//
-//		// get input data by connecting to the socket
-//		DataStream<String> text = env.socketTextStream("localhost", port, "\n");
-//
-//		// parse the data, group it, window it, and aggregate the counts
-//		DataStream<WordWithCount> windowCounts = text
-//				.flatMap(new FlatMapFunction<String, WordWithCount>() {
-//					@Override
-//					public void flatMap(String value, Collector<WordWithCount> out) {
-//						for (String word : value.split("\\s")) {
-//							out.collect(new WordWithCount(word, 1L));
-//						}
-//					}
-//				})
-//				.keyBy("word")
-//				.timeWindow(Time.seconds(5), Time.seconds(3))
-//				.reduce(new ReduceFunction<WordWithCount>() {
-//					@Override
-//					public WordWithCount reduce(WordWithCount a, WordWithCount b) {
-//						return new WordWithCount(a.word, a.count + b.count);
-//					}
-//				});
-//
-//		// print the results with a single thread, rather than in parallel
-//		windowCounts.print().setParallelism(1);
-//
-//		env.execute("Task 2 Friend Recommendation");
-//	}
-//
-//	// Data type for words with count
-//	public static class WordWithCount {
-//
-//		public String word;
-//		public long count;
-//
-//		public WordWithCount() {}
-//
-//		public WordWithCount(String word, long count) {
-//			this.word = word;
-//			this.count = count;
-//		}
-//
-//		@Override
-//		public String toString() {
-//			return word + " : " + count;
-//		}
-//	}
 }
