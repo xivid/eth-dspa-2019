@@ -18,14 +18,7 @@
 
 package socialnetwork;
 
-import akka.stream.impl.fusing.Collect;
-import org.apache.flink.api.common.functions.*;
-import org.apache.flink.api.common.operators.Keys;
-import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -38,9 +31,9 @@ import org.apache.flink.util.Collector;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 public class Task2 {
@@ -49,71 +42,115 @@ public class Task2 {
 		// set up the streaming execution environment
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
+		// config
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+		final Time outOfOrdernessBound = Time.minutes(30);
+		final Long[] eigenUserIds = new Long[] {10000L, 10001L};
 
+		// get input
 		DataStream<Activity> input =
 			env.readTextFile("/Users/zhifei/repo/eth-dspa-2019/project/data/task2.txt")
 			   .map(Activity::new)
-			   .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Time.minutes(30)) {
+			   .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(outOfOrdernessBound) {
 				   public long extractTimestamp(Activity a) {
 					   return a.timestamp;
 				   }
 			   });
 
-		input.keyBy(new KeySelector<Activity, Tuple2<Long, Long>>() {
-						@Override
-						public Tuple2<Long, Long> getKey(Activity value) throws Exception {
-							return Tuple2.of(value.postId, value.userId);
-						}
-				    })
-			 .window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
-//			 .fold("\n\n", new FoldFunction<Activity, String>() {
-//					public String fold(String acc, Activity value) {
-//						return acc + value;
-//					}
-//				})
-			 .aggregate(new CountAggregate(), new CountProcessWindowFunction())
-			 .print();
+
+		DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = input
+			.keyBy(activity -> activity.postId)
+			.window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
+			.process(new GetUserSimilarities(eigenUserIds));  // TODO: change this to fold
+
+		similaritiesPerPost.print();
+
+		// Use consecutive windowed operations
+		// https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/operators/windows.html#consecutive-windowed-operations
+//
+//		DataStream<ArrayList<HashMap<Long, Integer>>> globalSimilarities = similaritiesPerPost
+//				.windowAll(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
+//				.
+//			.print();
 
 		// execute program
 		env.execute("Task 2 Friend Recommendation");
 	}
 
-	private static class CountAggregate
-			implements AggregateFunction<Activity, Long, Long> {
-		@Override
-		public Long createAccumulator() {
-			return 0L;
-		}
+	public static class GetUserSimilarities
+			extends ProcessWindowFunction<Activity, ArrayList<HashMap<Long, Integer>>, Long, TimeWindow> {
+
+		private Long[] eigenUserIds;
+
+		public GetUserSimilarities(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
 
 		@Override
-		public Long add(Activity a, Long accumulator) {
-			return accumulator + 1L;
-		}
+		public void process(Long postId, Context context, Iterable<Activity> input, Collector<ArrayList<HashMap<Long, Integer>>> out) {
+			// init similarity matrix
+			ArrayList<HashMap<Long, Integer>> similarities = new ArrayList<>();  // similarities[eigenUsers][allUsers]
+			for (int i = 0; i < eigenUserIds.length; ++i) {
+				HashMap<Long, Integer> map = new HashMap<>();
+				similarities.add(map);
+			}
 
-		@Override
-		public Long getResult(Long accumulator) {
-			return accumulator;
-		}
+			// count activities for every user (TODO: this can be done by `fold`)
+			HashMap<Long, Integer> counts = new HashMap<>();  // userId -> num of activities on this post
+			for (Activity activity: input) {
+				counts.merge(activity.userId, 1, Integer::sum);
+			}
 
-		@Override
-		public Long merge(Long a, Long b) {
-			return a + b;
+			// calculate similarity
+			for (int i = 0; i < eigenUserIds.length; ++i) {
+				Integer eigenCount = counts.get(eigenUserIds[i]);
+				if (eigenCount != null) {
+					for (HashMap.Entry elem : counts.entrySet()) {
+						Long userId = (Long) elem.getKey();
+						Integer userCount = (Integer) elem.getValue();
+						similarities.get(i).put(userId, eigenCount * userCount);
+					}
+				}
+			}
+
+			System.out.println("PostId: " + postId + ", Window: " + context.window() + ", similarities: " + similarities);
+			out.collect(similarities);
 		}
 	}
+//	private static class CountAggregate
+//			implements AggregateFunction<Activity, Long, Long> {
+//		@Override
+//		public Long createAccumulator() {
+//			return 0L;
+//		}
+//
+//		@Override
+//		public Long add(Activity a, Long accumulator) {
+//			return accumulator + 1L;
+//		}
+//
+//		@Override
+//		public Long getResult(Long accumulator) {
+//			return accumulator;
+//		}
+//
+//		@Override
+//		public Long merge(Long a, Long b) {
+//			return a + b;
+//		}
+//	}
+//
+//
+//	private static class CountProcessWindowFunction
+//			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
+//
+//		public void process(Tuple2<Long, Long> key,
+//							Context context,
+//							Iterable<Long> counts,
+//							Collector<Tuple3<Long, Long, Long>> out) {
+//			Long count = counts.iterator().next();
+//			out.collect(new Tuple3<>(key.f0, key.f1, count));
+//		}
+//	}
 
-
-	private static class CountProcessWindowFunction
-			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
-
-		public void process(Tuple2<Long, Long> key,
-							Context context,
-							Iterable<Long> counts,
-							Collector<Tuple3<Long, Long, Long>> out) {
-			Long count = counts.iterator().next();
-			out.collect(new Tuple3<>(key.f0, key.f1, count));
-		}
-	}
 //
 //	private static class CountProcessWindowFunction
 //			extends ProcessWindowFunction<Long, Tuple3<Long, Long, Long>, Tuple2<Long, Long>, TimeWindow> {
