@@ -33,6 +33,7 @@ import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 
+import java.io.*;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -45,9 +46,10 @@ import java.util.stream.Stream;
 import static java.util.Arrays.asList;
 
 /*
+-------------------------------
 Test stream: data/task2.txt
-
-Post,1,10000,2019-05-01 08:00:00
+-------------------------------
+Post,1,10000,2019-05-01 08:00:00  // TODO change time span to have meaningful output for 4hr/1hr
 Post,2,10001,2019-05-01 08:30:22
 Comment,1,10000,2019-05-01 08:35:40
 Comment,1,10010,2019-05-01 09:00:09
@@ -57,8 +59,52 @@ Comment,1,10001,2019-05-01 15:22:33
 Comment,2,10010,2019-05-02 03:00:50
 Like,1,10000,2019-05-03 12:00:35
 Like,2,10001,2019-05-04 19:00:33
- */
+
+------------------------------------
+Test table: person_knows_person.csv
+------------------------------------
+Person.id|Person.id
+10000|10001
+10001|10010
+*/
 public class Task2 {
+
+    private static ArrayList<HashSet<Long>> getExistingFriendships(Long[] eigenUserIds, String csv_path) throws IOException {
+        // use hashmap first for easy lookup
+        HashMap<Long, HashSet<Long>> friendSets = new HashMap<>();
+        for (Long userId : eigenUserIds) {
+            friendSets.putIfAbsent(userId, new HashSet<>());
+        }
+
+        // store concerned relationships
+        InputStream csv_stream = new FileInputStream(csv_path);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(csv_stream));
+        // skip the header of the csv
+        reader.lines().skip(1).forEach(line -> {
+            String[] splits = line.split("\\|");
+            Long knower = Long.valueOf(splits[0]);
+            Long knowee = Long.valueOf(splits[1]);
+            if (friendSets.containsKey(knower)) {
+                friendSets.get(knower).add(knowee);
+            }
+        });
+        reader.close();
+
+        // put into arraylist
+        ArrayList<HashSet<Long>> retList = new ArrayList<>();
+        for (Long userId : eigenUserIds) {
+            retList.add(friendSets.get(userId));
+        }
+        return retList;
+    }
+
+    private static ArrayList<HashMap<Long, Integer>> getStaticSimilarities(String path_person_hasInterest_tag,
+                                                                           String path_person_isLocatedIn_place,
+                                                                           String path_person_studyAt_organisation,
+                                                                           String path_person_workAt_organisation) {
+
+        return null;
+    }
 
 	public static void main(String[] args) throws Exception {
 		// set up the streaming execution environment
@@ -66,11 +112,21 @@ public class Task2 {
 
 		// config
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
-		final Time outOfOrdernessBound = Time.minutes(0);
+		final Time outOfOrdernessBound = Time.minutes(0); // TODO test out-of-orderness
 		final Long[] eigenUserIds = new Long[] {10000L, 10001L};  // TODO get from config
-//		final ArrayList<HashSet<Long>> alreadyFriend = getExistingFriendships(); // TODO read from person_knows_person.csv
+        final String path_person_knows_person = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_knows_person.csv";
+        final String path_person_hasInterest_tag = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_hasInterest_tag.csv";
+        final String path_person_isLocatedIn_place = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_isLocatedIn_place.csv";
+        final String path_person_studyAt_organisation = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_studyAt_organisation.csv";
+        final String path_person_workAt_organisation = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_workAt_organisation.csv";
+		final ArrayList<HashSet<Long>> alreadyFriends = getExistingFriendships(eigenUserIds, path_person_knows_person);  // TODO read from real tables
+        final ArrayList<HashMap<Long, Integer>>
+                staticSimilarities = getStaticSimilarities(path_person_hasInterest_tag,
+                                                           path_person_isLocatedIn_place,
+                                                           path_person_studyAt_organisation,
+                                                           path_person_workAt_organisation);  // TODO read from real tables
 
-		// get input
+        // get input stream
 		DataStream<Activity> input =  // TODO get unioned, postId-resolved stream
 			env.readTextFile(System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/task2.txt")
 			   .map(Activity::new)
@@ -79,23 +135,20 @@ public class Task2 {
 					   return a.timestamp;
 				   }
 			   });
-
         input.print().setParallelism(1);
 
+        // get per-post similarities with a keyed sliding window
 		DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = input
 			.keyBy(activity -> activity.postId)
-			.window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
-            .aggregate(new CountActivitiesPerUser(eigenUserIds), new GetUserSimilarities(eigenUserIds));
+			.window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) // TODO (Time.hours(4), Time.hours(1)))
+            .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(eigenUserIds, alreadyFriends));
+		// similaritiesPerPost.print().setParallelism(1);
 
-		similaritiesPerPost.print().setParallelism(1);
-
-		// Use consecutive windowed operations
-		// https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/operators/windows.html#consecutive-windowed-operations
+		// Use another window to sum up the per-post similarities
 		DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
-            .windowAll(TumblingEventTimeWindows.of(Time.days(1))) //(Time.hours(4), Time.hours(1)))
+            .windowAll(TumblingEventTimeWindows.of(Time.days(1))) // TODO (Time.hours(4), Time.hours(1)))
             .aggregate(new SimilarityAggregate(eigenUserIds), new GetTopFiveRecommendations(eigenUserIds));
-
-		recommendations.print().setParallelism(1);
+		// recommendations.print().setParallelism(1);
 
 		// execute program
 		env.execute("Task 2 Friend Recommendation");
@@ -103,10 +156,6 @@ public class Task2 {
 
 	private static class CountActivitiesPerUser
             implements AggregateFunction<Activity, HashMap<Long, Integer>, HashMap<Long, Integer>> {
-
-        private Long[] eigenUserIds;
-
-        CountActivitiesPerUser(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
 
         @Override
         public HashMap<Long, Integer> createAccumulator() {
@@ -137,8 +186,12 @@ public class Task2 {
 			extends ProcessWindowFunction<HashMap<Long, Integer>, ArrayList<HashMap<Long, Integer>>, Long, TimeWindow> {
 
 		private Long[] eigenUserIds;
+		private ArrayList<HashSet<Long>> alreadyFriends;
 
-		public GetUserSimilarities(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+		GetUserSimilarities(Long[] eigenUserIds, ArrayList<HashSet<Long>> alreadyFriends) {
+		    this.eigenUserIds = eigenUserIds;
+		    this.alreadyFriends = alreadyFriends;
+		}
 
         String pretty(TimeWindow w) {
             LocalDateTime start = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getStart()),
@@ -156,7 +209,7 @@ public class Task2 {
 				similarities.add(new HashMap<>());
 			}
 
-			// count activities for every user (TODO: this can be done by `aggregate`)
+			// count activities for every user
 			HashMap<Long, Integer> counts = input.iterator().next();  // userId -> count
 
 			// calculate similarity
@@ -165,11 +218,11 @@ public class Task2 {
 				if (eigenCount != null) {
 					for (HashMap.Entry<Long, Integer> elem : counts.entrySet()) {
 						Long userId = elem.getKey();
-//						if (!alreadyFriend[eigenUserIds[i]].hasElement(userId)) {
+						if (!userId.equals(eigenUserIds[i]) && !alreadyFriends.get(i).contains(userId)) {
 						    // eliminate the already friend users here, so that size of similarities can be reduced (less communication overhead)
                             Integer userCount = elem.getValue();
                             similarities.get(i).put(userId, eigenCount * userCount);
-//                        }
+                        }
 					}
 				}
 			}
@@ -243,7 +296,7 @@ public class Task2 {
 			for (int i = 0; i < eigenUserIds.length; i++) {
 				ArrayList<Long> recommendationsPerUser = new ArrayList<>();
 				int c = 0;
-				for (HashMap.Entry<Long, Integer> elem : similarities.get(i).entrySet()) {
+				for (HashMap.Entry<Long, Integer> elem : similarities.get(i).entrySet()) { // TODO first normalize the per-eigen-user-similarities to [0,1] via dividing by max
 					recommendationsPerUser.add(elem.getKey());  // TODO select 5 with max similarity, and add static measure
 					if (++c == 5) break;
 				}
