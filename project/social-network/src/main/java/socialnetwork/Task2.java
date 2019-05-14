@@ -41,6 +41,20 @@ import java.util.stream.Stream;
 
 import static java.util.Arrays.asList;
 
+/*
+Test stream: data/task2.txt
+
+Post,1,10000,2019-05-01 08:00:00
+Post,2,10001,2019-05-01 08:30:22
+Comment,1,10000,2019-05-01 08:35:40
+Comment,1,10010,2019-05-01 09:00:09
+Comment,2,10000,2019-05-01 10:00:10
+Like,1,10001,2019-05-01 13:59:59
+Comment,1,10001,2019-05-01 15:22:33
+Comment,2,10010,2019-05-02 03:00:50
+Like,1,10000,2019-05-03 12:00:35
+Like,2,10001,2019-05-04 19:00:33
+ */
 public class Task2 {
 
 	public static void main(String[] args) throws Exception {
