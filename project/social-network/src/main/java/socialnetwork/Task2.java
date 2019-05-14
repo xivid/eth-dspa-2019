@@ -28,12 +28,15 @@ import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrderness
 import org.apache.flink.streaming.api.functions.windowing.ProcessAllWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -63,13 +66,13 @@ public class Task2 {
 
 		// config
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
-		final Time outOfOrdernessBound = Time.minutes(30);
+		final Time outOfOrdernessBound = Time.minutes(0);
 		final Long[] eigenUserIds = new Long[] {10000L, 10001L};  // TODO get from config
 		final ArrayList<HashMap<Long, Boolean>> isFriend = new ArrayList<>(); // TODO read from person_knows_person.csv
 
 		// get input
 		DataStream<Activity> input =  // TODO get unioned, postId-resolved stream
-			env.readTextFile("/Users/zhifei/repo/eth-dspa-2019/project/data/task2.txt")
+			env.readTextFile(System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/task2.txt")
 			   .map(Activity::new)
 			   .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(outOfOrdernessBound) {
 				   public long extractTimestamp(Activity a) {
@@ -77,21 +80,24 @@ public class Task2 {
 				   }
 			   });
 
+        input.print().setParallelism(1);
 
 		DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = input
 			.keyBy(activity -> activity.postId)
 			.window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
 			.process(new GetUserSimilarities(eigenUserIds));  // TODO: change this to aggregate
 
-//		similaritiesPerPost.print().setParallelism(1);
+		similaritiesPerPost.print().setParallelism(1);
 
 		// Use consecutive windowed operations
 		// https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/operators/windows.html#consecutive-windowed-operations
 		DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
-				.windowAll(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
+				.windowAll(TumblingEventTimeWindows.of(Time.days(1))) //(Time.hours(4), Time.hours(1)))
+//                .process(new AggregateAndGetTopFiveRecommendations(eigenUserIds));
+
 				.aggregate(new SimilarityAggregate(eigenUserIds), new GetTopFiveRecommendations(eigenUserIds));  // TODO fix: why are there always two accumulators?
 
-		recommendations.print().setParallelism(1);
+//		recommendations.print().setParallelism(1);
 
 		// execute program
 		env.execute("Task 2 Friend Recommendation");
@@ -103,6 +109,14 @@ public class Task2 {
 		private Long[] eigenUserIds;
 
 		public GetUserSimilarities(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+
+        String pretty(TimeWindow w) {
+            LocalDateTime start = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getStart()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            LocalDateTime end = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getEnd()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            return "{" + start + "-" + end + "}";
+        }
 
 		@Override
 		public void process(Long postId, Context context, Iterable<Activity> input, Collector<ArrayList<HashMap<Long, Integer>>> out) {
@@ -131,10 +145,68 @@ public class Task2 {
 				}
 			}
 
-			System.out.println("PostId: " + postId + ", Window: " + context.window() + ", similarities: " + similarities);
+			System.out.println("PostId: " + postId + ", Window: " + pretty(context.window()) + ", similarities: " + similarities);
 			out.collect(similarities);
 		}
 	}
+
+    public static class AggregateAndGetTopFiveRecommendations
+            extends ProcessAllWindowFunction<ArrayList<HashMap<Long, Integer>>, ArrayList<ArrayList<Long>>, TimeWindow> {
+
+        private Long[] eigenUserIds;
+
+        public AggregateAndGetTopFiveRecommendations(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+
+        String pretty(TimeWindow w) {
+            LocalDateTime start = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getStart()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            LocalDateTime end = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getEnd()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            return "{" + start + "-" + end + "}";
+        }
+
+        @Override
+        public void process(Context context, Iterable<ArrayList<HashMap<Long, Integer>>> input, Collector<ArrayList<ArrayList<Long>>> out) {
+
+//            input.iterator().hasNext()
+            // get global similarities
+            ArrayList<HashMap<Long, Integer>> similarities = null;  // similarities[eigenUsers][allUsers]
+			for (ArrayList<HashMap<Long, Integer>> local : input) {
+			    if (similarities == null) {
+			        // take the vector of the first post
+			        similarities = local;
+                    System.out.println("Window: " + pretty(context.window()) + ", init: " + similarities);
+                } else {
+			        // add the vector of another post
+			        for (int i = 0; i < local.size(); ++i) {
+                        for (HashMap.Entry<Long, Integer> elem : local.get(i).entrySet()) {
+                            similarities.get(i).merge(elem.getKey(), elem.getValue(), Integer::sum);
+				        }
+                    }
+                    System.out.println("Window: " + pretty(context.window()) + ", add: " + local + ", accu: " + similarities);
+                }
+            }
+
+            System.out.println("Window: " + pretty(context.window()) + ", similarities: " + similarities);
+
+			assert similarities != null;
+
+			// get recommendations
+            ArrayList<ArrayList<Long>> recommendations = new ArrayList<>();
+            for (int i = 0; i < similarities.size(); i++) {
+                ArrayList<Long> recommendationsPerUser = new ArrayList<>();
+                int c = 0;
+                for (HashMap.Entry<Long, Integer> elem : similarities.get(i).entrySet()) {
+                    recommendationsPerUser.add(elem.getKey());  // TODO select 5 with max similarity, and add static measure
+                    if (++c == 5) break;
+                }
+                recommendations.add(recommendationsPerUser);
+                System.out.println("Window: " + pretty(context.window()) + ", recommend for " + eigenUserIds[i] + ": " + recommendationsPerUser);
+            }
+
+            out.collect(recommendations);
+        }
+    }
 
 
 	private static class SimilarityAggregate
@@ -142,9 +214,7 @@ public class Task2 {
 
 		private Long[] eigenUserIds;
 
-		public SimilarityAggregate(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds;
-			System.out.println("New SimilarityAggregate");
-		}
+		public SimilarityAggregate(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
 
 		@Override
 		public ArrayList<HashMap<Long, Integer>> createAccumulator() {
@@ -183,10 +253,17 @@ public class Task2 {
 	private static class GetTopFiveRecommendations
 			extends ProcessAllWindowFunction<ArrayList<HashMap<Long, Integer>>, ArrayList<ArrayList<Long>>, TimeWindow> {
 
-
 		private Long[] eigenUserIds;
 
-		public GetTopFiveRecommendations(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+		GetTopFiveRecommendations(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+
+        String pretty(TimeWindow w) {
+            LocalDateTime start = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getStart()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            LocalDateTime end = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getEnd()),
+                    TimeZone.getTimeZone("GMT+0").toZoneId());
+            return "{" + start + "-" + end + "}";
+        }
 
 		public void process(Context context,
 							Iterable<ArrayList<HashMap<Long, Integer>>> aggregations,
@@ -195,7 +272,7 @@ public class Task2 {
 			ArrayList<HashMap<Long, Integer>> similarities = aggregations.iterator().next();
 			ArrayList<ArrayList<Long>> recommendations = new ArrayList<>();
 
-			System.out.println("Window: " + context.window() + ", Similarities: " + similarities);
+			System.out.println("Window: " + pretty(context.window()) + ", similarities: " + similarities);
 			for (int i = 0; i < similarities.size(); i++) {
 				ArrayList<Long> recommendationsPerUser = new ArrayList<>();
 				int c = 0;
@@ -204,7 +281,7 @@ public class Task2 {
 					if (++c == 5) break;
 				}
 				recommendations.add(recommendationsPerUser);
-				System.out.println("Window: " + context.window() + ", recommend for " + eigenUserIds[i] + ": " + recommendationsPerUser);
+				System.out.println("Window: " + pretty(context.window()) + ", recommend for " + eigenUserIds[i] + ": " + recommendationsPerUser);
 			}
 
 			out.collect(recommendations);
@@ -240,7 +317,7 @@ public class Task2 {
 			this.postId = Long.valueOf(splits[1]);
 			this.userId = Long.valueOf(splits[2]);
 			this.eventTime = LocalDateTime.from(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").parse(splits[3]));
-			this.timestamp = eventTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+			this.timestamp = eventTime.atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
 		}
 
 		@Override
