@@ -75,7 +75,7 @@ public class Task2 {
 		// https://ci.apache.org/projects/flink/flink-docs-release-1.8/dev/stream/operators/windows.html#consecutive-windowed-operations
 		DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
 				.windowAll(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) //(Time.hours(4), Time.hours(1)))
-				.aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(eigenUserIds));
+				.aggregate(new SimilarityAggregate(eigenUserIds), new GetTopFiveRecommendations(eigenUserIds));  // TODO fix: why are there always two accumulators?
 
 		recommendations.print().setParallelism(1);
 
@@ -125,13 +125,26 @@ public class Task2 {
 
 	private static class SimilarityAggregate
 			implements AggregateFunction<ArrayList<HashMap<Long, Integer>>, ArrayList<HashMap<Long, Integer>>, ArrayList<HashMap<Long, Integer>>> {
+
+		private Long[] eigenUserIds;
+
+		public SimilarityAggregate(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds;
+			System.out.println("New SimilarityAggregate");
+		}
+
 		@Override
 		public ArrayList<HashMap<Long, Integer>> createAccumulator() {
-			return new ArrayList<>();
+			ArrayList<HashMap<Long, Integer>> accu = new ArrayList<>();  // similarities[eigenUsers][allUsers]
+			for (int i = 0; i < eigenUserIds.length; ++i) {
+				accu.add(new HashMap<>());
+			}
+			System.out.println("Created accumulator " + System.identityHashCode(accu));
+			return accu;
 		}
 
 		@Override
 		public ArrayList<HashMap<Long, Integer>> add(ArrayList<HashMap<Long, Integer>> value, ArrayList<HashMap<Long, Integer>> accumulator) {
+			System.out.println("add value: " + value + ", accu " + System.identityHashCode(accumulator) +": " + accumulator);
 			assert value.size() == accumulator.size();
 			for (int i = 0; i < accumulator.size(); ++i) {
 				for (HashMap.Entry<Long, Integer> elem : value.get(i).entrySet()) {
@@ -148,6 +161,7 @@ public class Task2 {
 
 		@Override
 		public ArrayList<HashMap<Long, Integer>> merge(ArrayList<HashMap<Long, Integer>> r1, ArrayList<HashMap<Long, Integer>> r2) {
+			System.out.println("merge r1: " + r1 + ", r2: " + r2);
 			return add(r1, r2);
 		}
 	}
@@ -167,8 +181,7 @@ public class Task2 {
 			ArrayList<HashMap<Long, Integer>> similarities = aggregations.iterator().next();
 			ArrayList<ArrayList<Long>> recommendations = new ArrayList<>();
 
-//			System.out.println("similarities.size() = " + similarities.size());
-			// why this size is 0?
+			System.out.println("Window: " + context.window() + ", Similarities: " + similarities);
 			for (int i = 0; i < similarities.size(); i++) {
 				ArrayList<Long> recommendationsPerUser = new ArrayList<>();
 				int c = 0;
