@@ -434,7 +434,7 @@ public class Task2 {
         }
     }
 
-    public static class UserWithSimilarityComparator implements Comparator<UserWithSimilarity>{
+    public static class UserWithSimilarityComparator implements Comparator<UserWithSimilarity> {
         // for descending order of similarity
         public int compare(UserWithSimilarity s1, UserWithSimilarity s2) {
             if (s1.similarity < s2.similarity)
