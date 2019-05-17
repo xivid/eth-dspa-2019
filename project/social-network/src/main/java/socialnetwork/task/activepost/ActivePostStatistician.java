@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package socialnetwork.task;
+package socialnetwork.task.activepost;
 
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -31,6 +31,8 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import socialnetwork.task.TaskBase;
 import socialnetwork.util.Activity;
 
@@ -41,10 +43,11 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
-public class Task1 extends TaskBase <Activity> {
+public class ActivePostStatistician extends TaskBase <Activity, ActivePostStatistician.PostWithCount> {
+    final static Logger logger = LoggerFactory.getLogger("Task1");
 
     @Override
-    public void buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
+    public DataStream<PostWithCount> buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
 
 //        // config
 //        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
@@ -52,6 +55,26 @@ public class Task1 extends TaskBase <Activity> {
 //
 //        // execute program
 //        env.execute("Task 1 Active Post Statistics");
+        return null;
     }
 
+    public enum PostWithCountType {
+        CommentsAndReplies,
+        UniqueUsers,
+        Others;
+
+        static PostWithCountType fromString(String s) {
+            if (s.equals("CommentsAndReplies")) return CommentsAndReplies;
+            if (s.equals("UniqueUsers")) return UniqueUsers;
+            logger.error("Unknown PostWithCountType: {}", s);
+            return Others;
+        }
+    }
+
+    public class PostWithCount {
+        public PostWithCountType type;
+        public Integer count;
+
+        PostWithCount(PostWithCountType t, Integer c) { type = t; count = c; }
+    }
 }
