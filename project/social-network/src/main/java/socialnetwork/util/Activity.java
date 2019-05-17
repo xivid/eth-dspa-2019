@@ -156,7 +156,7 @@ public abstract class Activity {
 
         @Override
         public Integer getKey() {
-            System.out.println("overriden getkey");
+            System.out.println("overridden Activity::getKey");
             if (isPostIdResolved()) return postId;
             logger.info("Reply {} postId not resolved, use its own id as key", commentId);
             return commentId;
