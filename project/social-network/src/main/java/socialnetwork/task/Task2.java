@@ -20,10 +20,8 @@ package socialnetwork.task;
 
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
 import org.apache.flink.streaming.api.functions.windowing.ProcessAllWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
@@ -41,17 +39,14 @@ import java.util.*;
 
 public class Task2 extends TaskBase <Activity> {
 
+    private final Long[] eigenUserIds = Config.eigenUserIds;
+
     public void buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
         final ArrayList<HashSet<Long>>
-                alreadyKnows = getExistingFriendships(Config.eigenUserIds, Config.path_person_knows_person);
+                alreadyKnows = getExistingFriendships();
 
         final ArrayList<HashMap<Long, Integer>>
-                staticSimilarities = getStaticSimilarities(Config.eigenUserIds,
-                                                           alreadyKnows,
-                                                           Config.path_person_hasInterest_tag,
-                                                           Config.path_person_isLocatedIn_place,
-                                                           Config.path_person_studyAt_organisation,
-                                                           Config.path_person_workAt_organisation);
+                staticSimilarities = getStaticSimilarities(alreadyKnows);
 
         /* test input stream
         DataStream<Activity> testInput =
@@ -69,17 +64,17 @@ public class Task2 extends TaskBase <Activity> {
         DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = inputStream
             .keyBy(activity -> activity.postId)
             .window(SlidingEventTimeWindows.of(Time.hours(4), Time.hours(1)))
-            .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(Config.eigenUserIds, alreadyKnows));
+            .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(alreadyKnows));
         // similaritiesPerPost.print().setParallelism(1);
 
         // Use another window to sum up the per-post similarities
         DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
             .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
-            .aggregate(new SimilarityAggregate(Config.eigenUserIds), new GetTopFiveRecommendations(Config.eigenUserIds, staticSimilarities, Config.staticWeight));
+            .aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(staticSimilarities, Config.staticWeight));
         // recommendations.print().setParallelism(1);
     }
 
-    private ArrayList<HashSet<Long>> getExistingFriendships(Long[] eigenUserIds, String csvPath) {
+    private ArrayList<HashSet<Long>> getExistingFriendships() {
         // use hashmap first for easy lookup
         HashMap<Long, HashSet<Long>> friendSets = new HashMap<>();
         for (Long userId : eigenUserIds) {
@@ -88,7 +83,7 @@ public class Task2 extends TaskBase <Activity> {
 
         // store concerned relationships
         try {
-            InputStream csvStream = new FileInputStream(csvPath);
+            InputStream csvStream = new FileInputStream(Config.path_person_knows_person);
             BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
             // skip the header of the csv
             reader.lines().skip(1).forEach(line -> {
@@ -115,9 +110,8 @@ public class Task2 extends TaskBase <Activity> {
 
 
     private void updateSimilarityWithOneCSV(ArrayList<HashMap<Long, Integer>> similarities,
-                                                   Long[] eigenUserIds,
-                                                   ArrayList<HashSet<Long>> alreadyKnows,
-                                                   String csvPath) {
+                                            ArrayList<HashSet<Long>> alreadyKnows,
+                                            String csvPath) {
         HashMap<Long, HashSet<Long>> setsPerUser = new HashMap<>();
 
         // read into a hashmap: userId -> set<objects>
@@ -153,22 +147,17 @@ public class Task2 extends TaskBase <Activity> {
     }
 
 
-    private ArrayList<HashMap<Long, Integer>> getStaticSimilarities(Long[] eigenUserIds,
-                                                                           ArrayList<HashSet<Long>> alreadyKnows,
-                                                                           String path_person_hasInterest_tag,
-                                                                           String path_person_isLocatedIn_place,
-                                                                           String path_person_studyAt_organisation,
-                                                                           String path_person_workAt_organisation) {
+    private ArrayList<HashMap<Long, Integer>> getStaticSimilarities(ArrayList<HashSet<Long>> alreadyKnows) {
         // init
         ArrayList<HashMap<Long, Integer>> similarities = new ArrayList<>();
         for (int i = 0; i < eigenUserIds.length; i++) {
             similarities.add(new HashMap<>());
         }
 
-        updateSimilarityWithOneCSV(similarities, eigenUserIds, alreadyKnows, path_person_hasInterest_tag);
-        updateSimilarityWithOneCSV(similarities, eigenUserIds, alreadyKnows, path_person_isLocatedIn_place);
-        updateSimilarityWithOneCSV(similarities, eigenUserIds, alreadyKnows, path_person_studyAt_organisation);
-        updateSimilarityWithOneCSV(similarities, eigenUserIds, alreadyKnows, path_person_workAt_organisation);
+        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_hasInterest_tag);
+        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_isLocatedIn_place);
+        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_studyAt_organisation);
+        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_workAt_organisation);
 
         return similarities;
     }
@@ -207,8 +196,8 @@ public class Task2 extends TaskBase <Activity> {
         private Long[] eigenUserIds;
         private ArrayList<HashSet<Long>> alreadyKnows;
 
-        GetUserSimilarities(Long[] eigenUserIds, ArrayList<HashSet<Long>> alreadyKnows) {
-            this.eigenUserIds = eigenUserIds;
+        GetUserSimilarities(ArrayList<HashSet<Long>> alreadyKnows) {
+            this.eigenUserIds = Config.eigenUserIds;
             this.alreadyKnows = alreadyKnows;
         }
 
@@ -256,7 +245,7 @@ public class Task2 extends TaskBase <Activity> {
 
         private Long[] eigenUserIds;
 
-        SimilarityAggregate(Long[] eigenUserIds) { this.eigenUserIds = eigenUserIds; }
+        SimilarityAggregate() { this.eigenUserIds = Config.eigenUserIds; }
 
         @Override
         public ArrayList<HashMap<Long, Integer>> createAccumulator() {
@@ -296,8 +285,8 @@ public class Task2 extends TaskBase <Activity> {
         ArrayList<HashMap<Long, Integer>> staticSimilarities;
         Double staticWeight, dynamicWeight;
 
-        GetTopFiveRecommendations(Long[] eigenUserIds, ArrayList<HashMap<Long, Integer>> staticSimilarities, Double staticWeight) {
-            this.eigenUserIds = eigenUserIds;
+        GetTopFiveRecommendations(ArrayList<HashMap<Long, Integer>> staticSimilarities, Double staticWeight) {
+            this.eigenUserIds = Config.eigenUserIds;
             this.staticSimilarities = staticSimilarities;
             this.staticWeight = staticWeight;
             this.dynamicWeight = 1.0 - staticWeight;
