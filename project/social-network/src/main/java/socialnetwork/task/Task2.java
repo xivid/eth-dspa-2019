@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package socialnetwork;
+package socialnetwork.task;
 
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -31,68 +31,55 @@ import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindo
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
+import socialnetwork.util.Activity;
+import socialnetwork.util.Config;
 
 import java.io.*;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 
-public class Task2 {
+public class Task2 extends TaskBase <Activity> {
 
-    public static void main(String[] args) throws Exception {
-        // set up the streaming execution environment
-        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    public void buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
+        final ArrayList<HashSet<Long>>
+                alreadyKnows = getExistingFriendships(Config.eigenUserIds, Config.path_person_knows_person);
 
-        // config
-        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
-        final Time outOfOrdernessBound = Time.minutes(0); // TODO test out-of-orderness
-        final Long[] eigenUserIds = new Long[] {10000L, 10001L};  // TODO get from config
-        final String path_person_knows_person = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_knows_person.csv";
-        final String path_person_hasInterest_tag = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_hasInterest_tag.csv";
-        final String path_person_isLocatedIn_place = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_isLocatedIn_place.csv";
-        final String path_person_studyAt_organisation = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_studyAt_organisation.csv";
-        final String path_person_workAt_organisation = System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/person_workAt_organisation.csv";
-        final ArrayList<HashSet<Long>> alreadyKnows = getExistingFriendships(eigenUserIds, path_person_knows_person);  // TODO read from real tables
         final ArrayList<HashMap<Long, Integer>>
-                staticSimilarities = getStaticSimilarities(eigenUserIds,
+                staticSimilarities = getStaticSimilarities(Config.eigenUserIds,
                                                            alreadyKnows,
-                                                           path_person_hasInterest_tag,
-                                                           path_person_isLocatedIn_place,
-                                                           path_person_studyAt_organisation,
-                                                           path_person_workAt_organisation);  // TODO read from real tables
-        final Double staticWeight = 0.3; // TODO get from config
+                                                           Config.path_person_hasInterest_tag,
+                                                           Config.path_person_isLocatedIn_place,
+                                                           Config.path_person_studyAt_organisation,
+                                                           Config.path_person_workAt_organisation);
 
-        // get input stream
-        DataStream<Activity> input =  // TODO get unioned, postId-resolved stream
+        /* test input stream
+        DataStream<Activity> testInput =
             env.readTextFile(System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/task2.txt")
                .map(Activity::new)
-               .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(outOfOrdernessBound) {
+               .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
                    public long extractTimestamp(Activity a) {
                        return a.timestamp;
                    }
                });
-        input.print().setParallelism(1);
+        // input.print().setParallelism(1);
+        */
 
         // get per-post similarities with a keyed sliding window
-        DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = input
+        DataStream<ArrayList<HashMap<Long, Integer>>> similaritiesPerPost = inputStream
             .keyBy(activity -> activity.postId)
-            .window(SlidingEventTimeWindows.of(Time.days(2), Time.days(1))) // TODO (Time.hours(4), Time.hours(1)))
-            .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(eigenUserIds, alreadyKnows));
+            .window(SlidingEventTimeWindows.of(Time.hours(4), Time.hours(1)))
+            .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(Config.eigenUserIds, alreadyKnows));
         // similaritiesPerPost.print().setParallelism(1);
 
         // Use another window to sum up the per-post similarities
         DataStream<ArrayList<ArrayList<Long>>> recommendations = similaritiesPerPost
-            .windowAll(TumblingEventTimeWindows.of(Time.days(1))) // TODO (Time.hours(4), Time.hours(1)))
-            .aggregate(new SimilarityAggregate(eigenUserIds), new GetTopFiveRecommendations(eigenUserIds, staticSimilarities, staticWeight));
+            .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
+            .aggregate(new SimilarityAggregate(Config.eigenUserIds), new GetTopFiveRecommendations(Config.eigenUserIds, staticSimilarities, Config.staticWeight));
         // recommendations.print().setParallelism(1);
-
-        // execute program
-        env.execute("Task 2 Friend Recommendation");
     }
 
-    private static ArrayList<HashSet<Long>> getExistingFriendships(Long[] eigenUserIds, String csvPath) throws IOException {
+    private ArrayList<HashSet<Long>> getExistingFriendships(Long[] eigenUserIds, String csvPath) {
         // use hashmap first for easy lookup
         HashMap<Long, HashSet<Long>> friendSets = new HashMap<>();
         for (Long userId : eigenUserIds) {
@@ -100,18 +87,23 @@ public class Task2 {
         }
 
         // store concerned relationships
-        InputStream csvStream = new FileInputStream(csvPath);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
-        // skip the header of the csv
-        reader.lines().skip(1).forEach(line -> {
-            String[] splits = line.split("\\|");
-            Long knower = Long.valueOf(splits[0]);
-            Long knowee = Long.valueOf(splits[1]);
-            if (friendSets.containsKey(knower)) {
-                friendSets.get(knower).add(knowee);
-            }
-        });
-        reader.close();
+        try {
+            InputStream csvStream = new FileInputStream(csvPath);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
+            // skip the header of the csv
+            reader.lines().skip(1).forEach(line -> {
+                String[] splits = line.split("\\|");
+                Long knower = Long.valueOf(splits[0]);
+                Long knowee = Long.valueOf(splits[1]);
+                if (friendSets.containsKey(knower)) {
+                    friendSets.get(knower).add(knowee);
+                }
+            });
+            reader.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
 
         // put into arraylist
         ArrayList<HashSet<Long>> retList = new ArrayList<>();
@@ -122,22 +114,27 @@ public class Task2 {
     }
 
 
-    private static void updateSimilarityWithOneCSV(ArrayList<HashMap<Long, Integer>> similarities,
+    private void updateSimilarityWithOneCSV(ArrayList<HashMap<Long, Integer>> similarities,
                                                    Long[] eigenUserIds,
                                                    ArrayList<HashSet<Long>> alreadyKnows,
-                                                   String csvPath) throws IOException {
+                                                   String csvPath) {
         HashMap<Long, HashSet<Long>> setsPerUser = new HashMap<>();
 
         // read into a hashmap: userId -> set<objects>
-        InputStream csvStream = new FileInputStream(csvPath);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
-        reader.lines().skip(1).forEach(line -> {
-            String[] splits = line.split("\\|");
-            Long userId = Long.valueOf(splits[0]);
-            Long objectId = Long.valueOf(splits[1]);
-            setsPerUser.computeIfAbsent(userId, k -> new HashSet<>()).add(objectId);
-        });
-        reader.close();
+        try {
+            InputStream csvStream = new FileInputStream(csvPath);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
+            reader.lines().skip(1).forEach(line -> {
+                String[] splits = line.split("\\|");
+                Long userId = Long.valueOf(splits[0]);
+                Long objectId = Long.valueOf(splits[1]);
+                setsPerUser.computeIfAbsent(userId, k -> new HashSet<>()).add(objectId);
+            });
+            reader.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
 
         // update similarities with cardinality of intersection set
         for (int i = 0; i < eigenUserIds.length; i++) {
@@ -156,12 +153,12 @@ public class Task2 {
     }
 
 
-    private static ArrayList<HashMap<Long, Integer>> getStaticSimilarities(Long[] eigenUserIds,
+    private ArrayList<HashMap<Long, Integer>> getStaticSimilarities(Long[] eigenUserIds,
                                                                            ArrayList<HashSet<Long>> alreadyKnows,
                                                                            String path_person_hasInterest_tag,
                                                                            String path_person_isLocatedIn_place,
                                                                            String path_person_studyAt_organisation,
-                                                                           String path_person_workAt_organisation) throws IOException {
+                                                                           String path_person_workAt_organisation) {
         // init
         ArrayList<HashMap<Long, Integer>> similarities = new ArrayList<>();
         for (int i = 0; i < eigenUserIds.length; i++) {
@@ -380,45 +377,6 @@ public class Task2 {
             }
 
             out.collect(recommendations);
-        }
-    }
-
-    // Data type for Activities
-    public static class Activity {
-
-        public enum ActivityType {
-            Post,
-            Comment,
-            Like,
-            Others;
-
-            static ActivityType fromString(String s) {
-                if (s.equals("Post")) return Post;
-                if (s.equals("Comment")) return Comment;
-                if (s.equals("Like")) return Like;
-                return Others;
-            }
-        };
-
-        public ActivityType type;
-        public Long postId;
-        public Long userId;
-        public LocalDateTime eventTime;
-        public Long timestamp;
-
-        public Activity(String line) {
-            String[] splits = line.split(",");
-            this.type = ActivityType.fromString(splits[0]);
-            this.postId = Long.valueOf(splits[1]);
-            this.userId = Long.valueOf(splits[2]);
-            this.eventTime = LocalDateTime.from(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").parse(splits[3]));
-            this.timestamp = eventTime.atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
-        }
-
-        @Override
-        public String toString() {
-            return "(type: " + type + ", postId: " + postId + ", userId: " + userId
-                    + ", eventTime: " + eventTime + ", timestamp: " + timestamp + ")";
         }
     }
 
