@@ -11,18 +11,46 @@ import java.time.format.DateTimeFormatter;
 public abstract class Activity {
     final static Logger logger = LoggerFactory.getLogger("SocialNetwork");
 
-    Integer personId;
-    Integer postId = -1;
-    LocalDateTime creationDate;
-    Long eventTimestamp;
+    public enum ActivityType {
+        Post,
+        Comment,
+        Reply,
+        Like,
+        Tombstone;
 
-    void setEventTime(String s) {
-        this.creationDate = LocalDateTime.from(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.S][S][S][X][X]").parse(s));
-        this.eventTimestamp = creationDate.atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
+        static ActivityType fromString(String s) {
+            if (s.equals("Post")) return Post;
+            if (s.equals("Comment")) return Comment;
+            if (s.equals("Reply")) return Reply;
+            if (s.equals("Like")) return Like;
+            return Tombstone;
+        }
     }
 
-    public Long getEventTimestamp() {
-        return eventTimestamp;
+    public ActivityType getType() {
+        if (this instanceof Post) return ActivityType.Post;
+        if (this instanceof Reply) return ActivityType.Reply;
+        if (this instanceof Comment) return ActivityType.Comment;  // Comment but not Reply
+        if (this instanceof Like) return ActivityType.Like;
+        return ActivityType.Tombstone;
+    }
+
+    // Common fields of all activities
+    Integer personId;
+    Integer postId = -1;
+    String creationDate;
+    Long creationTimestamp;
+
+    void setCreationDate(String s) {
+        // Ref: https://docs.oracle.com/javase/8/docs/api/java/time/format/DateTimeFormatter.html#patterns
+        this.creationDate = s;
+        this.creationTimestamp = LocalDateTime
+                .from(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.S][S][S][X][X]").parse(s))
+                .atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
+    }
+
+    public Long getCreationTimestamp() {
+        return creationTimestamp;
     }
 
     public Integer getPersonId() {
@@ -46,7 +74,6 @@ public abstract class Activity {
         return postId;
     }
 
-
     public Integer getPostId() {
         if (postId < 0) {
             logger.error("Getting unresolved postId of " + this.toString());
@@ -56,6 +83,10 @@ public abstract class Activity {
 
     public boolean isCommentOrReply() {
         return this instanceof Comment;  // Reply is also a subclass of Comment
+    }
+
+    public boolean isReply() {
+        return this instanceof Reply;
     }
 
     public static class Deserializer extends AbstractDeserializationSchema<Activity> {
@@ -92,7 +123,7 @@ public abstract class Activity {
             String[] splits = line.split("\\|");
             this.postId = Integer.valueOf(splits[1]);
             this.personId = Integer.valueOf(splits[2]);
-            setEventTime(splits[3]);
+            setCreationDate(splits[3]);
             this.imageFile = splits[4];
             this.locationIP = splits[5];
             this.browserUsed = splits[6];
@@ -101,6 +132,12 @@ public abstract class Activity {
             this.tags = splits[9];
             this.forumId = Integer.valueOf(splits[10]);
             this.placeId = Integer.valueOf(splits[11]);
+        }
+
+        public String toString() {
+            return "P|" + postId + "|" + personId + "|" + creationDate + "|" + imageFile + "|" + locationIP + "|"
+                    + browserUsed + "|" + language + "|" + content + "|" + tags + "|" + forumId + "|" + placeId
+                    + "|" + creationTimestamp;
         }
     }
 
@@ -118,7 +155,7 @@ public abstract class Activity {
         Comment(String[] splits, Integer postId) {
             this.commentId = Integer.valueOf(splits[1]);
             this.personId = Integer.valueOf(splits[2]);
-            setEventTime(splits[3]);
+            setCreationDate(splits[3]);
             this.locationIP = splits[4];
             this.browserUsed = splits[5];
             this.content = splits[6];
@@ -135,6 +172,19 @@ public abstract class Activity {
             if (splits[7].equals(""))  // no reply_to_postId
                 return new Reply(splits);
             return new Comment(splits);
+        }
+
+        public Integer getSelfId() {
+            return commentId;
+        }
+
+        public Integer getParentId() {
+            return postId;
+        }
+
+        public String toString() {
+             return "C|" + commentId + "|" + personId + "|" + creationDate + "|" + locationIP + "|" + browserUsed
+                     + "|" + content + "|" + postId + "||" + placeId + "|" + creationTimestamp;
         }
     }
 
@@ -156,12 +206,27 @@ public abstract class Activity {
 
         @Override
         public Integer getKey() {
-            System.out.println("overridden Activity::getKey");
+            logger.debug("overridden Activity::getKey");
             if (isPostIdResolved()) return postId;
             logger.info("Reply {} postId not resolved, use its own id as key", commentId);
             return commentId;
         }
 
+        @Override
+        public Integer getParentId() {
+            return parentId;
+        }
+
+        public void setPostId(Integer val) {
+            if (postId != -1)
+                logger.warn("Overwriting already resolved postId {} with {}!", postId, val);
+            postId = val;
+        }
+
+        public String toString() {
+            return "C|" + commentId + "|" + personId + "|" + creationDate + "|" + locationIP + "|" + browserUsed
+                    + "|" + content + "||" + parentId + "|" + placeId + "|" + creationTimestamp;
+        }
     }
 
     /**
@@ -173,19 +238,27 @@ public abstract class Activity {
             String[] splits = line.split("\\|");
             this.personId = Integer.valueOf(splits[1]);
             this.postId = Integer.valueOf(splits[2]);
-            setEventTime(splits[3]);
+            setCreationDate(splits[3]);
+        }
+
+        public String toString() {
+            return "L|" + personId + "|" + postId + "|" + creationDate + "|" + creationTimestamp;
         }
     }
 
     /**
      Format:
-     L|postId|creationDate
+     T|postId|creationDate
      */
     public static class Tombstone extends Activity {
         Tombstone(String line) {
             String[] splits = line.split("\\|");
             this.postId = Integer.valueOf(splits[1]);
-            setEventTime(splits[2]);
+            setCreationDate(splits[2]);
+        }
+
+        public String toString() {
+            return "T|" + postId + "|" + creationDate + "|" + creationTimestamp;
         }
     }
 }

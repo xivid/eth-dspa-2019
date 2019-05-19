@@ -93,7 +93,7 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
                .map(Activity::fromString)
                .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
                    public long extractTimestamp(Activity a) {
-                       return a.getEventTimestamp();
+                       return a.getCreationTimestamp();
                    }
                });
         input.print().setParallelism(1);

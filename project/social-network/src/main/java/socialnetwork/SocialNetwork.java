@@ -10,7 +10,6 @@ import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrderness
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer011;
 import socialnetwork.task.activepost.ActivePostStatistician;
 import socialnetwork.task.postidresolution.PostIdResolver;
-import socialnetwork.task.recommendation.FriendRecommender;
 import socialnetwork.util.Activity;
 import socialnetwork.util.Config;
 
@@ -25,8 +24,33 @@ public class SocialNetwork {
     public static void main(String[] args) throws Exception {
         logger.info("Social Network Started");
 
-        /* set up the streaming execution environment */
-        final StreamExecutionEnvironment env;
+        logger.info("Setting up the stream execution environment");
+        final StreamExecutionEnvironment env = setupEnvironment();
+
+        logger.info("Building Dataflow: Ingest activities from Kafka");
+        DataStream<Activity> allActivitiesStream = getAllActivitiesStream(env);
+
+        logger.info("Building Dataflow: Resolve postId");
+        PostIdResolver postIdResolver = new PostIdResolver();
+        SingleOutputStreamOperator<Activity> postIdResolvedAllActivitiesStream = postIdResolver.buildPipeline(env, allActivitiesStream);
+
+        logger.info("Building Dataflow: Task 1 Active Post Statistics");
+        ActivePostStatistician task1 = new ActivePostStatistician();
+        task1.buildPipeline(env, postIdResolvedAllActivitiesStream);
+
+//        logger.info("Building Dataflow: Task 2 Friend Recommendation");
+//        FriendRecommender task2 = new FriendRecommender();
+//        task2.buildPipeline(env, allActivitiesStream);
+//        task2.buildTestPipeline(env);
+
+//        logger.info("Building Dataflow: Task 3 Unusual Activity Detection");
+        // TODO task 3
+
+        env.execute("Social Network");
+    }
+
+    public static StreamExecutionEnvironment setupEnvironment() {
+        StreamExecutionEnvironment env;
         if (Config.useLocalEnvironmentWithWebUI) {
             Configuration config = new Configuration();
             config.setBoolean(ConfigConstants.LOCAL_START_WEBSERVER, true);
@@ -36,25 +60,7 @@ public class SocialNetwork {
         }
         env.setParallelism(Config.parallelism);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
-
-        /* Ingest activities from Kafka */
-        DataStream<Activity> allActivitiesStream = getAllActivitiesStream(env);
-
-        /* Build postId-resolved input stream */
-        PostIdResolver postIdResolver = new PostIdResolver();
-        SingleOutputStreamOperator<Activity> postIdResolvedAllActivitiesStream = postIdResolver.buildPipeline(env, allActivitiesStream);
-
-        /* Perform tasks */
-        ActivePostStatistician task1 = new ActivePostStatistician();
-        task1.buildPipeline(env, allActivitiesStream);
-
-//        FriendRecommender task2 = new FriendRecommender();
-//        task2.buildPipeline(env, allActivitiesStream);
-//        task2.buildTestPipeline(env);
-
-        // TODO task 3
-
-        env.execute("Social Network");
+        return env;
     }
 
     public static DataStream<Activity> getAllActivitiesStream(StreamExecutionEnvironment env) {
@@ -65,10 +71,10 @@ public class SocialNetwork {
         // always read the Kafka topic from the start
         kafkaProps.setProperty("auto.offset.reset", "earliest");
         return env
-            .addSource(new FlinkKafkaConsumer011<>("all-activities", new Activity.Deserializer(), kafkaProps))
+            .addSource(new FlinkKafkaConsumer011<>(Config.allActivitiesTopic, new Activity.Deserializer(), kafkaProps))
             .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
                 public long extractTimestamp(Activity a) {
-                    return a.getEventTimestamp();
+                    return a.getCreationTimestamp();
                 }
             });
     }
