@@ -8,6 +8,7 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
@@ -19,14 +20,13 @@ import socialnetwork.util.Config;
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.InetSocketAddress;
-import java.text.SimpleDateFormat;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.TimeZone;
 import java.util.concurrent.Future;
+import socialnetwork.util.Helpers.*;
 
 public class PostIdResolver extends TaskBase<Activity, Activity> {
-    final static Logger logger = LoggerFactory.getLogger("SocialNetwork");
+    private final static Logger logger = LoggerFactory.getLogger("SocialNetwork");
 
     @Override
     public SingleOutputStreamOperator<Activity> buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
@@ -34,10 +34,8 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
         SingleOutputStreamOperator<Activity> stream = inputStream
                 .rebalance()
                 .map(new WriteMessageIdToMemcached())
-                .keyBy(Activity::getKey)  // TODO maybe need checking with Reply.class.isInstance(this) ?
+                .keyBy(Activity::getKey)
                 .process(new MappingResolver());
-
-        stream.writeAsText(Config.resolvedStreamOutputFilename, FileSystem.WriteMode.OVERWRITE).setParallelism(1);
 
         stream
                 .getSideOutput(Config.mappingOutputTag)
@@ -49,7 +47,20 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                 .writeAsText(Config.errorOutputFilename, FileSystem.WriteMode.OVERWRITE)
                 .setParallelism(1);
 
-        return stream;
+        SingleOutputStreamOperator<Activity> timestampFixedStream = stream
+                .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
+                    @Override
+                    public long extractTimestamp(Activity data) {
+                        return data.getCreationTimestamp();
+                    }
+                });
+
+        timestampFixedStream
+                .process(new GetMessageWithTimestamp<>())
+                .writeAsText(Config.resolvedStreamOutputFilename, FileSystem.WriteMode.OVERWRITE)
+                .setParallelism(1);
+
+        return timestampFixedStream;
     }
 
     public static class WriteMessageIdToMemcached extends RichMapFunction<Activity, Activity> implements Serializable {
@@ -126,7 +137,7 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                 case Comment: {
                     Activity.Comment comment = (Activity.Comment) activity;
                     String postId = "p_" + comment.getParentId();
-                    String childId = String.valueOf(comment.getSelfId());
+                    String childId = "r_" + comment.getSelfId();
 
                     Future<Boolean> setRequest = mc.set(childId, 0, postId);
                     while (!setRequest.isDone()) ;
@@ -134,6 +145,7 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                         logger.error("set request {} -> {} returned false", childId, postId);
                     }
 
+                    collector.collect(activity);
                     context.output(Config.mappingOutputTag, childId + " -> " + postId);
                     break;
                 }
@@ -165,16 +177,17 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                     }
                     else if(currentKey.startsWith("p_")) { // solved the mapping
                         resolve(context, reply, currentKey);
+                        collector.collect(activity);
+                    } else {
+                        logger.error("Got to end of case Reply trying to resolve post id mappings: reply=[{}], currentKey={}", reply.toString(), currentKey);
                     }
 
                     break;
                 }
 
                 default:
-                    logger.error("Got to end of switch trying to resolve post id mappings");
+                    logger.error("Got to case default trying to resolve post id mappings");
             }
-
-            collector.collect(activity);
         }
 
         @Override
@@ -201,7 +214,9 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                 resolve(context, reply, currentKey);
                 collector.collect(reply);
             }
-            logger.error("ERROR: Got to end of onTimer trying to resolve post id mappings");
+            else {
+                logger.error("Got to end of onTimer trying to resolve post id mappings: reply=[{}], currentKey={}", reply.toString(), currentKey);
+            }
         }
 
         private void resolve(Context context, Activity.Reply reply, String post) throws Exception {
@@ -215,5 +230,6 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
             context.output(Config.mappingOutputTag, childId + " -> " + post);
         }
     }
+
 
 }

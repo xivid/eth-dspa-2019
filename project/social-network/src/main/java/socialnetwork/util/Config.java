@@ -3,6 +3,8 @@ package socialnetwork.util;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.util.OutputTag;
 
+import java.io.File;
+
 public class Config {
 
     // Kafka config
@@ -11,22 +13,34 @@ public class Config {
     public final static String KAFKA_GROUP = "test-consumer-group";
     public static final int numKafkaPartitions = 1;
     public final static String allActivitiesTopic = numKafkaPartitions > 1 ? "all-multiple" : "all-single";
-
     // producer
-    private static final boolean use1KFiles = true;
+    public static final boolean use1KFiles = true;
+    public static final String Likes_1K = "data/1k-users-cleaned/streams/likes_event_stream.csv";
+    public static final String Comments_1K = "data/1k-users-cleaned/streams/comment_event_stream.csv";
+    public static final String Posts_1K = "data/1k-users-cleaned/streams/post_event_stream.csv";
+    public static final String Likes_10K = "data/10k-users-cleaned/streams/likes_event_stream.csv";
+    public static final String Comments_10K = "data/10k-users-cleaned/streams/comment_event_stream.csv";
+    public static final String Posts_10K = "data/10k-users-cleaned/streams/post_event_stream.csv";
     public static final boolean useSpeedupFactor = false;
     public static final int speedupFactor = 900000;
     public static final boolean produceInOrder = false;
     public final static Time outOfOrdernessBound = Time.minutes(5);
+    public static String[] getStreamInputFiles() {
+        return use1KFiles ?
+                new String[] {Comments_1K, Likes_1K, Posts_1K} : new String[] {Comments_10K, Likes_10K, Posts_10K};
+    }
+    public static String[] getStreamPrefixs() {
+        return new String[] {"C|", "L|", "P|"};
+    }
 
     // Flink config
-    public final static boolean useLocalEnvironmentWithWebUI = true;
-    public final static int parallelism = 4;
+    public final static boolean useLocalEnvironmentWithWebUI = true;  // setting to true sets up the dashboard at http://localhost:8081/
+    public final static int flinkParallelism = 4;
     public final static OutputTag<String> mappingOutputTag = new OutputTag<String>("mapping-output"){};
-    public final static String mappingOutputFilename = "actual_mappings.txt";
+    public final static String mappingOutputFilename = "log/actual_mappings.txt";
     public final static OutputTag<String> errorOutputTag = new OutputTag<String>("error-output"){};
-    public final static String errorOutputFilename = "errors.txt";
-    public final static String resolvedStreamOutputFilename = "resolved_stream.txt";
+    public final static String errorOutputFilename = "log/errors.txt";
+    public final static String resolvedStreamOutputFilename = "log/resolved_stream.txt";
 
 
     // Task 1 TODO tba

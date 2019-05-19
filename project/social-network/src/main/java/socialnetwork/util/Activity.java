@@ -1,5 +1,6 @@
 package socialnetwork.util;
 
+import com.esotericsoftware.kryo.NotNull;
 import org.apache.flink.api.common.serialization.AbstractDeserializationSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -206,9 +207,8 @@ public abstract class Activity {
 
         @Override
         public Integer getKey() {
-            logger.debug("overridden Activity::getKey");
             if (isPostIdResolved()) return postId;
-            logger.info("Reply {} postId not resolved, use its own id as key", commentId);
+//            logger.debug("Reply {} postId not resolved, use its own id as key", commentId);
             return commentId;
         }
 
@@ -251,6 +251,11 @@ public abstract class Activity {
      T|postId|creationDate
      */
     public static class Tombstone extends Activity {
+        public Tombstone(Integer postId, String creationDate) {
+            this.postId = postId;
+            setCreationDate(creationDate);
+        }
+
         Tombstone(String line) {
             String[] splits = line.split("\\|");
             this.postId = Integer.valueOf(splits[1]);

@@ -58,7 +58,7 @@ public class SocialNetwork {
         } else {
             env = StreamExecutionEnvironment.getExecutionEnvironment();
         }
-        env.setParallelism(Config.parallelism);
+        env.setParallelism(Config.flinkParallelism);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         return env;
     }
@@ -70,8 +70,12 @@ public class SocialNetwork {
         kafkaProps.setProperty("group.id", Config.KAFKA_GROUP);
         // always read the Kafka topic from the start
         kafkaProps.setProperty("auto.offset.reset", "earliest");
+        FlinkKafkaConsumer011<Activity> consumer =
+                new FlinkKafkaConsumer011<>(Config.allActivitiesTopic, new Activity.Deserializer(), kafkaProps);
+        consumer.setStartFromEarliest();
         return env
-            .addSource(new FlinkKafkaConsumer011<>(Config.allActivitiesTopic, new Activity.Deserializer(), kafkaProps))
+            .addSource(consumer)
+            .setParallelism(Integer.min(Config.numKafkaPartitions, Config.flinkParallelism))
             .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
                 public long extractTimestamp(Activity a) {
                     return a.getCreationTimestamp();

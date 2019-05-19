@@ -20,8 +20,12 @@ package socialnetwork.task.activepost;
 
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.datastream.WindowedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
 import org.apache.flink.streaming.api.functions.windowing.ProcessAllWindowFunction;
@@ -49,23 +53,50 @@ public class ActivePostStatistician extends TaskBase <Activity, ActivePostStatis
     @Override
     public DataStream<PostWithCount> buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
 
-//        // config
-//        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+//        WindowedStream<Tuple3<Long, Data_Type, Message>, Long, TimeWindow> windowedStream = stream
+//                .keyBy(val -> val.f0)
+//                .timeWindow(Time.hours(12), Time.minutes(30))
+//                .allowedLateness(Config.MAX_DELAY)
+//                .trigger(ExactlyOnceEventTimeTrigger.create())
+//                .sideOutputLateData(lateTag);
 //
+//        SingleOutputStreamOperator<Tuple3<Long, Long, Long>> commentsCountStream = windowedStream
+//                .aggregate(CountMessages.ofType(Data_Type.COMMENT), new AppendWindowStartAndKey());
 //
-//        // execute program
-//        env.execute("Task 1 Active Post Statistics");
+//        commentsCountStream
+//                .getSideOutput(lateTag)
+//                .writeAsText("late-messages.txt", FileSystem.WriteMode.OVERWRITE)
+//                .setParallelism(1);
+//
+//        commentsCountStream
+//                .writeAsText("comment-counts.txt", FileSystem.WriteMode.OVERWRITE)
+//                .setParallelism(1);
+//
+//        SingleOutputStreamOperator<Tuple3<Long, Long, Long>> repliesCountStream = windowedStream
+//                .aggregate(CountMessages.ofType(Data_Type.REPLY), new AppendWindowStartAndKey());
+//
+//        repliesCountStream
+//                .writeAsText("reply-counts.txt", FileSystem.WriteMode.OVERWRITE)
+//                .setParallelism(1);
+//
+//        repliesCountStream
+//                .getSideOutput(lateTag)
+//                .writeAsText("late-messages.txt", FileSystem.WriteMode.OVERWRITE)
+//                .setParallelism(1);
+
         return null;
     }
 
     public enum PostWithCountType {
-        CommentsAndReplies,
-        UniqueUsers,
+        Comment,
+        Reply,
+        Person,
         Others;
 
         static PostWithCountType fromString(String s) {
-            if (s.equals("CommentsAndReplies")) return CommentsAndReplies;
-            if (s.equals("UniqueUsers")) return UniqueUsers;
+            if (s.equals("Comment")) return Comment;
+            if (s.equals("Reply")) return Reply;
+            if (s.equals("Person")) return Person;
             logger.error("Unknown PostWithCountType: {}", s);
             return Others;
         }

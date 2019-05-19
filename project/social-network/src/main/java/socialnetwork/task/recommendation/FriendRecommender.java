@@ -239,7 +239,7 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
             this.alreadyKnows = alreadyKnows;
         }
 
-        String pretty(TimeWindow w) {
+        String prettify(TimeWindow w) {
             LocalDateTime start = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getStart()),
                     TimeZone.getTimeZone("GMT+0").toZoneId());
             LocalDateTime end = LocalDateTime.ofInstant(Instant.ofEpochMilli(w.getEnd()),
@@ -273,7 +273,7 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
                 }
             }
 
-            logger.debug("PostId: " + postId + ", Window: " + pretty(context.window()) + ", similarities: " + similarities);
+            logger.debug("PostId: " + postId + ", Window: " + prettify(context.window()) + ", similarities: " + similarities);
             out.collect(similarities);
         }
     }

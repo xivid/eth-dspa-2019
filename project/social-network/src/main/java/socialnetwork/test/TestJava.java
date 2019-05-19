@@ -12,6 +12,7 @@ public class TestJava {
 //        s = "2012-02-05T02:44:01.000ZZ";
 //        s = "2012-02-05T02:44:01.00ZZ";
 //        s = "2012-02-05T02:44:01.0ZZ";
+        s =  "9999-12-31T23:59:59Z";
         LocalDateTime creationDate = LocalDateTime.from(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.S][S][S][X][X]").parse(s));
         Long eventTimestamp = creationDate.atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
 
