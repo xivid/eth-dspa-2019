@@ -64,7 +64,6 @@ public class FlinkKafkaConsumer {
 		// set up the streaming execution environment
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         RocksDBStateBackend backend = new RocksDBStateBackend("file:///Users/Xivid/repo/eth-dspa-2019/session-9/rocks.db", true);
-//        RocksDBStateBackend backend = new RocksDBStateBackend("rocks.db", true);
         env.setStateBackend(backend);
 		// Set a fixed delay restart strategy with a maximum of 5 restart attempts
 		// and a 1s interval between retries
@@ -92,10 +91,10 @@ public class FlinkKafkaConsumer {
 					}
 				});
 
-		DataStream<Tuple2<String, Integer>> results = edits
+		DataStream<Tuple2<String, Double>> results = edits
 			// group by user
 			.keyBy(0)
-			.flatMap(new ComputeDiffs());
+			.flatMap(new ComputeDiffs()).setParallelism(2);
 		results.print().setParallelism(1);
 
 		// execute program
@@ -104,22 +103,13 @@ public class FlinkKafkaConsumer {
 
 	// Keep track of user byte diffs in a HashMap
 	public static final class ComputeDiffs extends RichFlatMapFunction<
-				Tuple2<String, Integer>, Tuple2<String, Integer>> {
+				Tuple2<String, Integer>, Tuple2<String, Double>> {
 
 		// user -> diffs
-        // private HashMap<String, Integer> diffs;
-//		private transient MapState<String, Integer> diffs;
         private transient ValueState<Tuple2<String, Integer>> diffs;
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
-//            MapStateDescriptor<String, Integer> descriptor =
-//                    new MapStateDescriptor<String, Integer>(
-//                            "diffs",
-//                            TypeInformation.of(new TypeHint<String>() {}),
-//                            TypeInformation.of(new TypeHint<Integer>() {})
-//                    );
-//            diffs = getRuntimeContext().getMapState(descriptor);
             ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
                     new ValueStateDescriptor<Tuple2<String, Integer>>(
                             "diffs",
@@ -131,7 +121,7 @@ public class FlinkKafkaConsumer {
 
 		@Override
 		public void flatMap(Tuple2<String, Integer> in,
-							Collector<Tuple2<String, Integer>> out) throws Exception {
+							Collector<Tuple2<String, Double>> out) throws Exception {
 			String user = in.f0;
 			int diff = in.f1;
             Tuple2<String, Integer> currentDiff = diffs.value();
@@ -139,7 +129,7 @@ public class FlinkKafkaConsumer {
             currentDiff.f0 = user;
             currentDiff.f1 += diff;
 
-			out.collect(currentDiff);
+			out.collect(new Tuple2<String, Double>(currentDiff.f0, currentDiff.f1 / 1024.0));
 		}
 	}
 
