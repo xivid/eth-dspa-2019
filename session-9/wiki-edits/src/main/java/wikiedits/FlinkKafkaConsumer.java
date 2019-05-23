@@ -29,8 +29,15 @@ import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.serialization.AbstractDeserializationSchema;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -56,9 +63,15 @@ public class FlinkKafkaConsumer {
 	public static void main(String[] args) throws Exception {
 		// set up the streaming execution environment
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        RocksDBStateBackend backend = new RocksDBStateBackend("file:///Users/Xivid/repo/eth-dspa-2019/session-9/rocks.db", true);
+//        RocksDBStateBackend backend = new RocksDBStateBackend("rocks.db", true);
+        env.setStateBackend(backend);
 		// Set a fixed delay restart strategy with a maximum of 5 restart attempts
 		// and a 1s interval between retries
 		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(5, 1000));
+
+		// Take a checkpoint every 10s
+		env.enableCheckpointing(10000);
 
 		Properties kafkaProps = new Properties();
 		kafkaProps.setProperty("zookeeper.connect", "localhost:2181");
@@ -94,11 +107,26 @@ public class FlinkKafkaConsumer {
 				Tuple2<String, Integer>, Tuple2<String, Integer>> {
 
 		// user -> diffs
-		private HashMap<String, Integer> diffs;
+        // private HashMap<String, Integer> diffs;
+//		private transient MapState<String, Integer> diffs;
+        private transient ValueState<Tuple2<String, Integer>> diffs;
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
-			diffs = new HashMap<>();
+//            MapStateDescriptor<String, Integer> descriptor =
+//                    new MapStateDescriptor<String, Integer>(
+//                            "diffs",
+//                            TypeInformation.of(new TypeHint<String>() {}),
+//                            TypeInformation.of(new TypeHint<Integer>() {})
+//                    );
+//            diffs = getRuntimeContext().getMapState(descriptor);
+            ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
+                    new ValueStateDescriptor<Tuple2<String, Integer>>(
+                            "diffs",
+                            TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
+                            Tuple2.of("", 0)
+                    );
+            diffs = getRuntimeContext().getState(descriptor);
 		}
 
 		@Override
@@ -106,15 +134,12 @@ public class FlinkKafkaConsumer {
 							Collector<Tuple2<String, Integer>> out) throws Exception {
 			String user = in.f0;
 			int diff = in.f1;
-			if (diffs.containsKey(user)) {
-				// Update existing HashMap value
-				diffs.put(user, diffs.get(user) + diff);
-			}
-			else {
-				// Insert new user in HashMap
-				diffs.put(user, diff);
-			}
-			out.collect(new Tuple2<String, Integer>(user, diffs.get(user)));
+            Tuple2<String, Integer> currentDiff = diffs.value();
+
+            currentDiff.f0 = user;
+            currentDiff.f1 += diff;
+
+			out.collect(currentDiff);
 		}
 	}
 
