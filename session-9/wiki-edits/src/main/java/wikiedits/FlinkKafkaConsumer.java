@@ -83,11 +83,6 @@ public class FlinkKafkaConsumer {
 			// group by user
 			.keyBy(0)
 			.flatMap(new ComputeDiffs());
-
-		results
-			.writeAsText("output.txt", FileSystem.WriteMode.OVERWRITE)
-			.setParallelism(1);
-
 		results.print().setParallelism(1);
 
 		// execute program
