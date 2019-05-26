@@ -36,13 +36,13 @@ public class SocialNetwork {
         postIdResolver.buildPipeline(env, allActivitiesStream);
         SingleOutputStreamOperator<Activity> postIdResolvedAllActivitiesStream = postIdResolver.getResolvedStream();
 
-        logger.info("Building Dataflow: Task 1 Active Post Statistics");
-        ActivePostStatistician task1 = new ActivePostStatistician();
-        task1.buildPipeline(env, postIdResolvedAllActivitiesStream);
-
-        logger.info("Building Dataflow: Task 2 Friend Recommendation");
-        FriendRecommender task2 = new FriendRecommender();
-        task2.buildPipeline(env, postIdResolvedAllActivitiesStream);
+//        logger.info("Building Dataflow: Task 1 Active Post Statistics");
+//        ActivePostStatistician task1 = new ActivePostStatistician();
+//        task1.buildPipeline(env, postIdResolvedAllActivitiesStream);
+//
+//        logger.info("Building Dataflow: Task 2 Friend Recommendation");
+//        FriendRecommender task2 = new FriendRecommender();
+//        task2.buildPipeline(env, postIdResolvedAllActivitiesStream);
 
         logger.info("Building Dataflow: Task 3 Unusual Activity Detection");
         AnomalousUserDetector task3 = new AnomalousUserDetector();

@@ -13,10 +13,10 @@ public class Config {
     public final static String LOCAL_ZOOKEEPER_HOST = "localhost:2181";
     public final static String LOCAL_KAFKA_BROKER = "localhost:9092";
     public final static String KAFKA_GROUP = "test-consumer-group";
-    public static final int numKafkaPartitions = 4;
+    public static final int numKafkaPartitions = 3;
     public final static String allActivitiesTopic = numKafkaPartitions > 1 ? "all-multiple" : "all-single";
     // producer
-    public static final boolean use1KFiles = true;
+    public static final boolean use1KFiles = false;
     public static final String Likes_1K = "data/1k-users-cleaned/streams/likes_event_stream.csv";
     public static final String Comments_1K = "data/1k-users-cleaned/streams/comment_event_stream.csv";
     public static final String Posts_1K = "data/1k-users-cleaned/streams/post_event_stream.csv";
@@ -31,12 +31,10 @@ public class Config {
     private static final String COMMENTS_10K_RAW = "data/10k-users-raw/streams/comment_event_stream.csv";
     private static final String POSTS_10K_RAW = "data/10k-users-raw/streams/post_event_stream.csv";
 
-    // if useSpeedupFactor == false: produce at max speed
-    // if useSpeedupFactor == true && speedupFactor == 1: produce at event real time speed
     public static final boolean useSpeedupFactor = false;
     public static final int speedupFactor = 900000;
     public static final boolean produceInOrder = false;
-    public final static Time outOfOrdernessBound = Time.minutes(5);
+    public final static Time outOfOrdernessBound = Time.minutes(30);
 
     public static String[] getStreamCleanedInputFiles() {
         return use1KFiles ?
@@ -62,7 +60,6 @@ public class Config {
     public final static OutputTag<String> errorOutputTag = new OutputTag<String>("error-output"){};
     public final static String errorOutputFilename = "log/errors.txt";
     public final static String resolvedStreamOutputFilename = "log/resolved_stream.txt";
-
 
     // Task 1
     public final static String lateCommentsOutputFilename = "log/late-comments.txt";

@@ -47,7 +47,7 @@ public class Producer {
 
     private static void produceToKafka(KafkaProducer<String, String> producer, TreeMap<Long, List<Activity>> allActivitiesByTimestamp) {
         try {
-            System.out.println(String.format("Producing %s proportionally to Kafka topic %s...\n", Config.produceInOrder ? "in order" : "out of order", Config.allActivitiesTopic));
+            System.out.println(String.format("Producing %s %sto Kafka topic %s...\n", Config.produceInOrder ? "in order" : "out of order", Config.useSpeedupFactor ? "proportionally " : "", Config.allActivitiesTopic));
             long numberOfSentRecords = 0;
 
             Map.Entry<Long, List<Activity>> entry = allActivitiesByTimestamp.pollFirstEntry();

@@ -11,11 +11,7 @@ import java.util.Map;
 import static socialnetwork.util.Activity.*;
 
 class OrderedFileChecker {
-    // id, time
-    private final Map<Integer, Long> posts = new HashMap<>();
-    private final Map<Integer, Long> comments = new HashMap<>();
-
-    void checkTree(){
+    static void checkTree() {
         String[] cleanedFileNames = Config.getStreamCleanedInputFiles();
         final BufferedReader commR = Helpers.getFileReader(cleanedFileNames[0]);
         final BufferedReader likesR = Helpers.getFileReader(cleanedFileNames[1]);
@@ -25,11 +21,14 @@ class OrderedFileChecker {
         assert (commR != null);
         assert (likesR != null);
 
+        // id, time
+        final Map<Integer, Long> posts = new HashMap<>();
+        final Map<Integer, Long> comments = new HashMap<>();
+
         String line;
         System.out.println("Checking cleaning...");
 
         try {
-            // add all posts
             postR.readLine();
             long old_time = 0;
             while ((line = postR.readLine()) != null) {
@@ -40,7 +39,6 @@ class OrderedFileChecker {
                 old_time = curr_time;
             }
 
-            // add all likes, fix if they come later
             likesR.readLine();
             old_time = 0;
             while ((line = likesR.readLine()) != null) {
@@ -54,7 +52,6 @@ class OrderedFileChecker {
                 old_time = like_date;
             }
 
-            // add all comments
             commR.readLine();
             old_time = 0;
             while ((line = commR.readLine()) != null) {
