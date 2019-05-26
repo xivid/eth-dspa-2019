@@ -31,6 +31,8 @@ public class Config {
     private static final String COMMENTS_10K_RAW = "data/10k-users-raw/streams/comment_event_stream.csv";
     private static final String POSTS_10K_RAW = "data/10k-users-raw/streams/post_event_stream.csv";
 
+    // if useSpeedupFactor == false: produce at max speed
+    // if useSpeedupFactor == true && speedupFactor == 1: produce at event real time speed
     public static final boolean useSpeedupFactor = false;
     public static final int speedupFactor = 900000;
     public static final boolean produceInOrder = false;
