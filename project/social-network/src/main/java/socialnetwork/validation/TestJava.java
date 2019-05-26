@@ -1,9 +1,10 @@
-package socialnetwork.test;
+package socialnetwork.validation;
+
+import socialnetwork.util.Activity;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import socialnetwork.util.Activity;
 
 public class TestJava {
     public static void main(String[] args) {

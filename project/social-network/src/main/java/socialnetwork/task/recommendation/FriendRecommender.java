@@ -20,16 +20,19 @@ package socialnetwork.task.recommendation;
 
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.datastream.WindowedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
-import org.apache.flink.streaming.api.functions.windowing.ProcessAllWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import socialnetwork.task.TaskBase;
@@ -41,52 +44,55 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 
-public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<Integer>>> {
+public class FriendRecommender extends TaskBase<Activity> {
     
-    final static Logger logger = LoggerFactory.getLogger("Task2");
+    private final static Logger logger = LoggerFactory.getLogger("Task2");
     private final Integer[] eigenUserIds = Config.eigenUserIds;
+    private final OutputTag<Activity> lateTag = new OutputTag<Activity>("Task2Late") {};
 
-    public DataStream<ArrayList<ArrayList<Integer>>> buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
-        final ArrayList<HashSet<Integer>>
-                alreadyKnows = getExistingFriendships();
+    public void buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
+        final List<Set<Integer>> alreadyKnows = getExistingFriendships(eigenUserIds);
+        logger.info("Loaded existing friendships");
 
-        final ArrayList<HashMap<Integer, Integer>>
-                staticSimilarities = getStaticSimilarities(alreadyKnows);
-
-        /* test input stream
-        DataStream<Activity> testInput =
-            env.readTextFile(System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/test/task2.txt")
-               .map(Activity::new)
-               .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
-                   public long extractTimestamp(Activity a) {
-                       return a.timestamp;
-                   }
-               });
-        // input.print().setParallelism(1);
-        */
+        final List<Map<Integer, Integer>> staticSimilarities = getStaticSimilarities(eigenUserIds, alreadyKnows);
+        logger.info("Pre-computed static similarities");
 
         // get per-post similarities with a keyed sliding window
-        DataStream<ArrayList<HashMap<Integer, Integer>>> similaritiesPerPost = inputStream
+        WindowedStream<Activity, Integer, TimeWindow> windowedStream = inputStream
             .keyBy(Activity::getPostId)
             .window(SlidingEventTimeWindows.of(Time.hours(4), Time.hours(1)))
+            .allowedLateness(Config.outOfOrdernessBound)
+            .sideOutputLateData(lateTag);
+
+        SingleOutputStreamOperator<Tuple2<Integer, Map<Integer, Integer>>> similaritiesPerPost = windowedStream
             .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(alreadyKnows));
         // similaritiesPerPost.print().setParallelism(1);
 
-        // Use another window to sum up the per-post similarities
-        DataStream<ArrayList<ArrayList<Integer>>> recommendations = similaritiesPerPost
-            .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
-            .aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(staticSimilarities, Config.staticWeight));
-        // recommendations.print().setParallelism(1);
+        similaritiesPerPost
+                .getSideOutput(lateTag)
+                .writeAsText("log/task2-late.txt", FileSystem.WriteMode.OVERWRITE)
+                .setParallelism(1)
+                .name("task2-late");
 
-        return recommendations;
+        // Use another window to sum up the per-post similarities
+        DataStream<Tuple3<Long, Integer, List<Integer>>> recommendations = similaritiesPerPost
+                .keyBy(tuple -> tuple.f0)
+                .timeWindow(Time.hours(1))
+                .aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(staticSimilarities, Config.staticWeight));
+
+//        recommendations.print().setParallelism(1);
+        recommendations
+                .writeAsText("log/recommendations.txt", FileSystem.WriteMode.OVERWRITE)
+                .setParallelism(1)
+                .name("recommendations");
     }
 
     public void buildTestPipeline(StreamExecutionEnvironment env) {
-        final ArrayList<HashSet<Integer>>
-                alreadyKnows = getExistingFriendships();
+        final List<Set<Integer>>
+                alreadyKnows = getExistingFriendships(eigenUserIds);
 
-        final ArrayList<HashMap<Integer, Integer>>
-                staticSimilarities = getStaticSimilarities(alreadyKnows);
+        final List<Map<Integer, Integer>>
+                staticSimilarities = getStaticSimilarities(eigenUserIds, alreadyKnows);
 
         DataStream<Activity> input =
             env.readTextFile(System.getProperty("user.home") + "/repo/eth-dspa-2019/project/data/task2.txt")
@@ -99,29 +105,31 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
         input.print().setParallelism(1);
 
         // get per-post similarities with a keyed sliding window
-        DataStream<ArrayList<HashMap<Integer, Integer>>> similaritiesPerPost = input
+        DataStream<Tuple2<Integer, Map<Integer, Integer>>> similaritiesPerPost = input
                 .keyBy(Activity::getPostId)
                 .window(SlidingEventTimeWindows.of(Time.hours(4), Time.hours(1)))
                 .aggregate(new CountActivitiesPerUser(), new GetUserSimilarities(alreadyKnows));
         similaritiesPerPost.print().setParallelism(1);
 
         // Use another window to sum up the per-post similarities
-        DataStream<ArrayList<ArrayList<Integer>>> recommendations = similaritiesPerPost
-                .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
+        DataStream<Tuple3<Long, Integer, List<Integer>>> recommendations = similaritiesPerPost
+                .keyBy(tuple -> tuple.f0)
+                .timeWindow(Time.hours(1))
                 .aggregate(new SimilarityAggregate(), new GetTopFiveRecommendations(staticSimilarities, Config.staticWeight));
+
         recommendations.print().setParallelism(1);
     }
 
-    private ArrayList<HashSet<Integer>> getExistingFriendships() {
+    public static List<Set<Integer>> getExistingFriendships(Integer[] eigenUserIds) {
         // use hashmap first for easy lookup
-        HashMap<Integer, HashSet<Integer>> friendSets = new HashMap<>();
+        Map<Integer, Set<Integer>> friendSets = new HashMap<>();
         for (Integer userId : eigenUserIds) {
             friendSets.putIfAbsent(userId, new HashSet<>());
         }
 
         // store concerned relationships
         try {
-            InputStream csvStream = new FileInputStream(Config.path_person_knows_person);
+            InputStream csvStream = new FileInputStream(Config.person_knows_person_1K);
             BufferedReader reader = new BufferedReader(new InputStreamReader(csvStream));
             // skip the header of the csv
             reader.lines().skip(1).forEach(line -> {
@@ -139,7 +147,7 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
         }
 
         // put into arraylist
-        ArrayList<HashSet<Integer>> retList = new ArrayList<>();
+        List<Set<Integer>> retList = new ArrayList<>();
         for (Integer userId : eigenUserIds) {
             retList.add(friendSets.get(userId));
         }
@@ -147,10 +155,11 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
     }
 
 
-    private void updateSimilarityWithOneCSV(ArrayList<HashMap<Integer, Integer>> similarities,
-                                            ArrayList<HashSet<Integer>> alreadyKnows,
-                                            String csvPath) {
-        HashMap<Integer, HashSet<Integer>> setsPerUser = new HashMap<>();
+    public static void updateSimilarityWithOneCSV(Integer[] eigenUserIds,
+                                                  List<Map<Integer, Integer>> similarities,
+                                                  List<Set<Integer>> alreadyKnows,
+                                                  String csvPath) {
+        Map<Integer, Set<Integer>> setsPerUser = new HashMap<>();
 
         // read into a hashmap: userId -> set<objects>
         try {
@@ -170,14 +179,14 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
 
         // update similarities with cardinality of intersection set
         for (int i = 0; i < eigenUserIds.length; i++) {
-            HashSet<Integer> eigenSet = setsPerUser.get(eigenUserIds[i]);
+            Set<Integer> eigenSet = setsPerUser.get(eigenUserIds[i]);
             if (eigenSet == null) continue;
 
-            for (HashMap.Entry<Integer, HashSet<Integer>> elem : setsPerUser.entrySet()) {
+            for (Map.Entry<Integer, Set<Integer>> elem : setsPerUser.entrySet()) {
                 Integer userId = elem.getKey();
                 if (userId.equals(eigenUserIds[i]) || alreadyKnows.get(i).contains(userId)) continue; // remove self and already-friend
 
-                HashSet<Integer> userSet = elem.getValue();
+                Set<Integer> userSet = elem.getValue();
                 userSet.retainAll(eigenSet);
                 similarities.get(i).merge(elem.getKey(), userSet.size(), Integer::sum);
             }
@@ -185,43 +194,43 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
     }
 
 
-    private ArrayList<HashMap<Integer, Integer>> getStaticSimilarities(ArrayList<HashSet<Integer>> alreadyKnows) {
+    public static List<Map<Integer, Integer>> getStaticSimilarities(Integer[] eigenUserIds, List<Set<Integer>> alreadyKnows) {
         // init
-        ArrayList<HashMap<Integer, Integer>> similarities = new ArrayList<>();
+        List<Map<Integer, Integer>> similarities = new ArrayList<>();
         for (int i = 0; i < eigenUserIds.length; i++) {
             similarities.add(new HashMap<>());
         }
 
-        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_hasInterest_tag);
-        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_isLocatedIn_place);
-        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_studyAt_organisation);
-        updateSimilarityWithOneCSV(similarities, alreadyKnows, Config.path_person_workAt_organisation);
+        updateSimilarityWithOneCSV(eigenUserIds, similarities, alreadyKnows, Config.person_hasInterest_tag_1K);
+        updateSimilarityWithOneCSV(eigenUserIds, similarities, alreadyKnows, Config.person_isLocatedIn_place_1K);
+        updateSimilarityWithOneCSV(eigenUserIds, similarities, alreadyKnows, Config.person_studyAt_organisation_1K);
+        updateSimilarityWithOneCSV(eigenUserIds, similarities, alreadyKnows, Config.person_workAt_organisation_1K);
 
         return similarities;
     }
 
     private static class CountActivitiesPerUser
-            implements AggregateFunction<Activity, HashMap<Integer, Integer>, HashMap<Integer, Integer>> {
+            implements AggregateFunction<Activity, Map<Integer, Integer>, Map<Integer, Integer>> {
 
         @Override
-        public HashMap<Integer, Integer> createAccumulator() {
+        public Map<Integer, Integer> createAccumulator() {
             return new HashMap<>();  // userId -> count
         }
 
         @Override
-        public HashMap<Integer, Integer> add(Activity value, HashMap<Integer, Integer> accumulator) {
+        public Map<Integer, Integer> add(Activity value, Map<Integer, Integer> accumulator) {
             accumulator.merge(value.getPersonId(), 1, Integer::sum);
             return accumulator;
         }
 
         @Override
-        public HashMap<Integer, Integer> getResult(HashMap<Integer, Integer> accumulator) {
+        public Map<Integer, Integer> getResult(Map<Integer, Integer> accumulator) {
             return accumulator;
         }
 
         @Override
-        public HashMap<Integer, Integer> merge(HashMap<Integer, Integer> r1, HashMap<Integer, Integer> r2) {
-            for (HashMap.Entry<Integer, Integer> elem : r1.entrySet()) {
+        public Map<Integer, Integer> merge(Map<Integer, Integer> r1, Map<Integer, Integer> r2) {
+            for (Map.Entry<Integer, Integer> elem : r1.entrySet()) {
                 r2.merge(elem.getKey(), elem.getValue(), Integer::sum);
             }
             return r2;
@@ -229,12 +238,12 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
     }
 
     public static class GetUserSimilarities
-            extends ProcessWindowFunction<HashMap<Integer, Integer>, ArrayList<HashMap<Integer, Integer>>, Integer, TimeWindow> {
+            extends ProcessWindowFunction<Map<Integer, Integer>, Tuple2<Integer, Map<Integer, Integer>>, Integer, TimeWindow> {
 
         private Integer[] eigenUserIds;
-        private ArrayList<HashSet<Integer>> alreadyKnows;
+        private List<Set<Integer>> alreadyKnows;
 
-        GetUserSimilarities(ArrayList<HashSet<Integer>> alreadyKnows) {
+        GetUserSimilarities(List<Set<Integer>> alreadyKnows) {
             this.eigenUserIds = Config.eigenUserIds;
             this.alreadyKnows = alreadyKnows;
         }
@@ -248,21 +257,21 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
         }
 
         @Override
-        public void process(Integer postId, Context context, Iterable<HashMap<Integer, Integer>> input, Collector<ArrayList<HashMap<Integer, Integer>>> out) {
+        public void process(Integer postId, Context context, Iterable<Map<Integer, Integer>> input, Collector<Tuple2<Integer, Map<Integer, Integer>>> out) {
             // init similarity matrix
-            ArrayList<HashMap<Integer, Integer>> similarities = new ArrayList<>();  // similarities[eigenUsers][allUsers] -> similarity
+            List<HashMap<Integer, Integer>> similarities = new ArrayList<>();  // similarities[eigenUsers][allUsers] -> similarity
             for (int i = 0; i < eigenUserIds.length; ++i) {
                 similarities.add(new HashMap<>());
             }
 
             // count activities for every user
-            HashMap<Integer, Integer> counts = input.iterator().next();  // userId -> count
+            Map<Integer, Integer> counts = input.iterator().next();  // userId -> count
 
             // calculate similarity
             for (int i = 0; i < eigenUserIds.length; ++i) {
                 Integer eigenCount = counts.get(eigenUserIds[i]);
                 if (eigenCount != null) {
-                    for (HashMap.Entry<Integer, Integer> elem : counts.entrySet()) {
+                    for (Map.Entry<Integer, Integer> elem : counts.entrySet()) {
                         Integer userId = elem.getKey();
                         if (!userId.equals(eigenUserIds[i]) && !alreadyKnows.get(i).contains(userId)) {
                             // eliminate the already friend users here, so that size of similarities can be reduced (less communication overhead)
@@ -272,58 +281,54 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
                     }
                 }
             }
-
-            logger.debug("PostId: " + postId + ", Window: " + prettify(context.window()) + ", similarities: " + similarities);
-            out.collect(similarities);
+//            logger.debug("PostId: " + postId + ", Window: " + prettify(context.window()) + ", similarities: " + similarities);
+            int eigenUserIndex = 0;
+            for(Map<Integer, Integer> eigenUserMap : similarities) {
+                out.collect(Tuple2.of(eigenUserIndex++, eigenUserMap));
+            }
         }
     }
 
     private static class SimilarityAggregate
-            implements AggregateFunction<ArrayList<HashMap<Integer, Integer>>, ArrayList<HashMap<Integer, Integer>>, ArrayList<HashMap<Integer, Integer>>> {
-
-        private Integer[] eigenUserIds;
-
-        SimilarityAggregate() { this.eigenUserIds = Config.eigenUserIds; }
+            implements AggregateFunction<Tuple2<Integer, Map<Integer, Integer>>, Tuple2<Integer, Map<Integer, Integer>>, Tuple2<Integer, Map<Integer, Integer>>> {
 
         @Override
-        public ArrayList<HashMap<Integer, Integer>> createAccumulator() {
-            ArrayList<HashMap<Integer, Integer>> accu = new ArrayList<>();  // similarities[eigenUsers][allUsers]
-            for (int i = 0; i < eigenUserIds.length; ++i) {
-                accu.add(new HashMap<>());
-            }
-            return accu;
+        public Tuple2<Integer, Map<Integer, Integer>> createAccumulator() {
+            return Tuple2.of(-1, new HashMap<>());
         }
 
         @Override
-        public ArrayList<HashMap<Integer, Integer>> add(ArrayList<HashMap<Integer, Integer>> value, ArrayList<HashMap<Integer, Integer>> accumulator) {
-            assert value.size() == accumulator.size();
-            for (int i = 0; i < accumulator.size(); ++i) {
-                for (HashMap.Entry<Integer, Integer> elem : value.get(i).entrySet()) {
-                    accumulator.get(i).merge(elem.getKey(), elem.getValue(), Integer::sum);
-                }
+        public Tuple2<Integer, Map<Integer, Integer>> add(Tuple2<Integer, Map<Integer, Integer>> value, Tuple2<Integer, Map<Integer, Integer>> accumulator) {
+            accumulator.f0 = value.f0;
+            for (Map.Entry<Integer, Integer> elem : value.f1.entrySet()) {
+                accumulator.f1.merge(elem.getKey(), elem.getValue(), Integer::sum);
             }
             return accumulator;
         }
 
         @Override
-        public ArrayList<HashMap<Integer, Integer>> getResult(ArrayList<HashMap<Integer, Integer>> accumulator) {
+        public Tuple2<Integer, Map<Integer, Integer>> getResult(Tuple2<Integer, Map<Integer, Integer>> accumulator) {
             return accumulator;
         }
 
         @Override
-        public ArrayList<HashMap<Integer, Integer>> merge(ArrayList<HashMap<Integer, Integer>> r1, ArrayList<HashMap<Integer, Integer>> r2) {
-            return add(r1, r2);
+        public Tuple2<Integer, Map<Integer, Integer>> merge(Tuple2<Integer, Map<Integer, Integer>> r1, Tuple2<Integer, Map<Integer, Integer>> r2) {
+            r2.f0 = r1.f0;
+            for (Map.Entry<Integer, Integer> elem : r1.f1.entrySet()) {
+                r2.f1.merge(elem.getKey(), elem.getValue(), Integer::sum);
+            }
+            return r2;
         }
     }
 
     private static class GetTopFiveRecommendations
-            extends ProcessAllWindowFunction<ArrayList<HashMap<Integer, Integer>>, ArrayList<ArrayList<Integer>>, TimeWindow> {
+            extends ProcessWindowFunction<Tuple2<Integer, Map<Integer, Integer>>, Tuple3<Long, Integer, List<Integer>>, Integer, TimeWindow> {
 
         private Integer[] eigenUserIds;
-        ArrayList<HashMap<Integer, Integer>> staticSimilarities;
+        List<Map<Integer, Integer>> staticSimilarities;
         Double staticWeight, dynamicWeight;
 
-        GetTopFiveRecommendations(ArrayList<HashMap<Integer, Integer>> staticSimilarities, Double staticWeight) {
+        GetTopFiveRecommendations(List<Map<Integer, Integer>> staticSimilarities, Double staticWeight) {
             this.eigenUserIds = Config.eigenUserIds;
             this.staticSimilarities = staticSimilarities;
             this.staticWeight = staticWeight;
@@ -338,80 +343,70 @@ public class FriendRecommender extends TaskBase<Activity, ArrayList<ArrayList<In
             return "[" + start + ", " + end + ")";
         }
 
-        ArrayList<Tuple2<Double, Double>> getSimilarityRanges(ArrayList<HashMap<Integer, Integer>> similarities) {
-            ArrayList<Tuple2<Double, Double>> ret = new ArrayList<>();
-            for (HashMap<Integer, Integer> map : similarities) {
-                Double lower = Double.POSITIVE_INFINITY, upper = Double.NEGATIVE_INFINITY;
-                for (HashMap.Entry<Integer, Integer> elem : map.entrySet()) {
-                    Double val = elem.getValue().doubleValue();
-                    if (val > upper) upper = val;
-                    if (val < lower) lower = val;
-                }
-                ret.add(new Tuple2<>(lower, upper));
+        Tuple2<Double, Double> getSimilarityRanges(Map<Integer, Integer> similarities) {
+            Double lower = Double.POSITIVE_INFINITY, upper = Double.NEGATIVE_INFINITY;
+            for (Map.Entry<Integer, Integer> elem : similarities.entrySet()) {
+                Double val = elem.getValue().doubleValue();
+                if (val > upper) upper = val;
+                if (val < lower) lower = val;
             }
-            return ret;
+            return Tuple2.of(lower, upper);
         }
 
-        public void process(Context context,
-                            Iterable<ArrayList<HashMap<Integer, Integer>>> aggregations,
-                            Collector<ArrayList<ArrayList<Integer>>> out) {
+        @Override
+        public void process(Integer key,
+                            Context context,
+                            Iterable<Tuple2<Integer, Map<Integer, Integer>>> aggregations,
+                            Collector<Tuple3<Long, Integer, List<Integer>>> out) {
+            Tuple2<Integer, Map<Integer, Integer>> input = aggregations.iterator().next();
+            int eigenUserIndex = input.f0;
+            int eigenUserId = eigenUserIds[eigenUserIndex];
+            Map<Integer, Integer> dynamicSimilarities = input.f1;
+            Tuple2<Double, Double> dynamicRange = getSimilarityRanges(dynamicSimilarities);
+            Tuple2<Double, Double> staticRange = getSimilarityRanges(staticSimilarities.get(eigenUserIndex));
+//            logger.debug("Window: " + prettify(context.window()) + ", dynamicSimilarities: " + dynamicSimilarities);
+//            logger.debug("Window: " + prettify(context.window()) + ", staticSimilarities: " + staticSimilarities);
 
-            ArrayList<HashMap<Integer, Integer>> dynamicSimilarities = aggregations.iterator().next();
-            ArrayList<Tuple2<Double, Double>> dynamicRanges = getSimilarityRanges(dynamicSimilarities);
-            ArrayList<Tuple2<Double, Double>> staticRanges = getSimilarityRanges(staticSimilarities);
-            logger.debug("Window: " + prettify(context.window()) + ", dynamicSimilarities: " + dynamicSimilarities);
-            logger.debug("Window: " + prettify(context.window()) + ", staticSimilarities: " + staticSimilarities);
+            double staticMin = staticRange.f0;
+            double staticSpan = staticRange.f1 - staticRange.f0;
+            double dynamicMin = dynamicRange.f0;
+            double dynamicSpan = dynamicRange.f1 - dynamicRange.f0;
 
-            ArrayList<ArrayList<Integer>> recommendations = new ArrayList<>();
+            PriorityQueue<UserWithSimilarity> queue = new PriorityQueue<>(new UserWithSimilarityComparator());
+            // for all users that have static similarity with eigen-user i
+            for (Map.Entry<Integer, Integer> elem : staticSimilarities.get(eigenUserIndex).entrySet()) {
+                Integer userId = elem.getKey();
+                Integer staticVal = elem.getValue();
+                Integer dynamicVal = dynamicSimilarities.getOrDefault(userId, 0);
+                dynamicSimilarities.remove(userId); // remove users that have both static and dynamic similarities with eigen-user i
 
-            for (int i = 0; i < eigenUserIds.length; i++) {
-                // calculate final similarity and sort
-                Tuple2<Double, Double> staticRange = staticRanges.get(i);
-                Tuple2<Double, Double> dynamicRange = dynamicRanges.get(i);
-
-                Double staticMin = staticRange.f0;
-                Double staticSpan = staticRange.f1 - staticRange.f0;
-                Double dynamicMin = dynamicRange.f0;
-                Double dynamicSpan = dynamicRange.f1 - dynamicRange.f0;
-
-                PriorityQueue<UserWithSimilarity> queue = new PriorityQueue<>(new UserWithSimilarityComparator());
-                // for all users that have static similarity with eigen-user i
-                for (HashMap.Entry<Integer, Integer> elem : staticSimilarities.get(i).entrySet()) {
-                    Integer userId = elem.getKey();
-                    Integer staticVal = elem.getValue();
-                    Integer dynamicVal = dynamicSimilarities.get(i).getOrDefault(userId, 0);
-                    dynamicSimilarities.get(i).remove(userId); // remove users that have both static and dynamic similarities with eigen-user i
-
-                    Double staticPart = (staticSpan > 0.0) ? ((staticVal - staticMin) / staticSpan) : 1.0;
-                    Double dynamicPart = (dynamicSpan > 0.0) ? ((dynamicVal - dynamicMin) / dynamicSpan) : 1.0;
-                    queue.offer(new UserWithSimilarity(userId, staticPart * staticWeight + dynamicPart * dynamicWeight));
-                }
-                // the remaining users have dynamic similarity with eigen-user i, but no static similarity
-                for (HashMap.Entry<Integer, Integer> elem : dynamicSimilarities.get(i).entrySet()) {
-                    Integer userId = elem.getKey();
-                    Integer dynamicVal = elem.getValue();
-                    queue.offer(new UserWithSimilarity(userId, ((dynamicSpan > 0.0) ? ((dynamicVal - dynamicMin) / dynamicSpan) : 1.0) * dynamicWeight));
-                }
-
-                // get top 5
-                ArrayList<Integer> recommendationsPerUser = new ArrayList<>();
-                while (!queue.isEmpty() && recommendationsPerUser.size() < 5) {
-                    UserWithSimilarity pair = queue.poll();
-                    recommendationsPerUser.add(pair.userId);
-                    logger.debug("Window: " + prettify(context.window()) + ", recommend for " + eigenUserIds[i] + ": " + pair);
-                }
-                recommendations.add(recommendationsPerUser);
+                Double staticPart = (staticSpan > 0.0) ? ((staticVal - staticMin) / staticSpan) : 1.0;
+                Double dynamicPart = (dynamicSpan > 0.0) ? ((dynamicVal - dynamicMin) / dynamicSpan) : 1.0;
+                queue.offer(new UserWithSimilarity(userId, staticPart * staticWeight + dynamicPart * dynamicWeight));
+            }
+            // the remaining users have dynamic similarity with eigen-user i, but no static similarity
+            for (Map.Entry<Integer, Integer> elem : dynamicSimilarities.entrySet()) {
+                Integer userId = elem.getKey();
+                Integer dynamicVal = elem.getValue();
+                queue.offer(new UserWithSimilarity(userId, ((dynamicSpan > 0.0) ? ((dynamicVal - dynamicMin) / dynamicSpan) : 1.0) * dynamicWeight));
             }
 
-            out.collect(recommendations);
+            // get top 5
+            List<Integer> recommendations = new ArrayList<>();
+            while (!queue.isEmpty() && recommendations.size() < 5) {
+                UserWithSimilarity pair = queue.poll();
+                recommendations.add(pair.userId);
+//                    logger.debug("Window: " + prettify(context.window()) + ", recommend for " + eigenUserIds[i] + ": " + pair);
+            }
+            out.collect(Tuple3.of(context.window().getEnd(), eigenUserId, recommendations));
         }
     }
 
     public static class UserWithSimilarity {
-        Integer userId;
-        Double similarity;
+        public Integer userId;
+        public Double similarity;
 
-        UserWithSimilarity(Integer userId, Double similarity) { this.userId = userId; this.similarity = similarity; }
+        public UserWithSimilarity(Integer userId, Double similarity) { this.userId = userId; this.similarity = similarity; }
 
         @Override
         public String toString() {

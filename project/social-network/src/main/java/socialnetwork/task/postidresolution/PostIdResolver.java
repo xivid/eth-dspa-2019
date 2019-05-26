@@ -8,7 +8,6 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
-import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
@@ -16,20 +15,23 @@ import org.slf4j.LoggerFactory;
 import socialnetwork.task.TaskBase;
 import socialnetwork.util.Activity;
 import socialnetwork.util.Config;
+import socialnetwork.util.Helpers.GetMessageWithTimestamp;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Future;
-import socialnetwork.util.Helpers.*;
 
-public class PostIdResolver extends TaskBase<Activity, Activity> {
+public class PostIdResolver extends TaskBase<Activity> {
     private final static Logger logger = LoggerFactory.getLogger("SocialNetwork");
 
+    SingleOutputStreamOperator<Activity> resolvedStream = null;
+
+    public SingleOutputStreamOperator<Activity> getResolvedStream() { return resolvedStream; }
+
     @Override
-    public SingleOutputStreamOperator<Activity> buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
+    public void buildPipeline(StreamExecutionEnvironment env, DataStream<Activity> inputStream) {
 
         SingleOutputStreamOperator<Activity> stream = inputStream
                 .rebalance()
@@ -40,27 +42,22 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
         stream
                 .getSideOutput(Config.mappingOutputTag)
                 .writeAsText(Config.mappingOutputFilename, FileSystem.WriteMode.OVERWRITE)
-                .setParallelism(1);
+                .setParallelism(1)
+                .name("mappingOutput");
 
         stream
                 .getSideOutput(Config.errorOutputTag)
                 .writeAsText(Config.errorOutputFilename, FileSystem.WriteMode.OVERWRITE)
-                .setParallelism(1);
+                .setParallelism(1)
+                .name("errorOutput");
 
-        SingleOutputStreamOperator<Activity> timestampFixedStream = stream
-                .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
-                    @Override
-                    public long extractTimestamp(Activity data) {
-                        return data.getCreationTimestamp();
-                    }
-                });
-
-        timestampFixedStream
+        stream
                 .process(new GetMessageWithTimestamp<>())
                 .writeAsText(Config.resolvedStreamOutputFilename, FileSystem.WriteMode.OVERWRITE)
-                .setParallelism(1);
+                .setParallelism(1)
+                .name("resolvedStream");
 
-        return timestampFixedStream;
+        resolvedStream = stream;
     }
 
     public static class WriteMessageIdToMemcached extends RichMapFunction<Activity, Activity> implements Serializable {
@@ -85,13 +82,12 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
             if(activity.isCommentOrReply()) {
                 Activity.Comment comment = (Activity.Comment) activity;
 
-                Integer childId = comment.getSelfId();
+                Integer childId = comment.getId();
                 Integer parentId = comment.getParentId();
                 String parentPrefix = activity.isReply() ? "r_" : "p_";  // is parent Comment or Post?
 
-                Future<Boolean> setRequest = mc.set("r_" + childId, 0, parentPrefix + parentId);
-                while(!setRequest.isDone());
-                if(!setRequest.get()) {
+                boolean setRequest = mc.set("r_" + childId, 0, parentPrefix + parentId).get();
+                if(!setRequest) {
                     logger.error("set request {} -> {} returned false", "r_" + childId, parentPrefix + parentId);
                 }
             }
@@ -127,27 +123,26 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
             switch (activity.getType()) {
                 case Tombstone:
                     logger.error("TOMBSTONE received at task {}", getRuntimeContext().getIndexOfThisSubtask());
-                    break;
+                    return;
 
                 case Post:
                 case Like:
                     collector.collect(activity);
-                    break;
+                    return;
 
                 case Comment: {
                     Activity.Comment comment = (Activity.Comment) activity;
                     String postId = "p_" + comment.getParentId();
-                    String childId = "r_" + comment.getSelfId();
+                    String childId = "r_" + comment.getId();
 
-                    Future<Boolean> setRequest = mc.set(childId, 0, postId);
-                    while (!setRequest.isDone()) ;
-                    if (!setRequest.get()) {
+                    boolean setRequest = mc.set(childId, 0, postId).get();
+                    if (!setRequest) {
                         logger.error("set request {} -> {} returned false", childId, postId);
                     }
 
                     collector.collect(activity);
                     context.output(Config.mappingOutputTag, childId + " -> " + postId);
-                    break;
+                    return;
                 }
 
                 case Reply: {
@@ -163,17 +158,15 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
 
                     if(currentKey == null) { // mapping unresolved
                         // Save any progress I have made into the k/v store
-                        String childId = "r_" + reply.getSelfId();
-                        Future<Boolean> setRequest = mc.set(childId, 0, prevKey);
-                        while(!setRequest.isDone());
-                        if(!setRequest.get()) {
+                        String childId = "r_" + reply.getId();
+                        boolean setRequest = mc.set(childId, 0, prevKey).get();
+                        if(!setRequest) {
                             logger.error("set request {} -> {} returned false", childId, prevKey);
                         }
 
-                        // then register a timer for my timestamp + MAX_DELAY in the future
+                        // then register a timer for my timestamp in the future
                         map.put(context.getCurrentKey(), reply);
-                        context.timerService().registerEventTimeTimer(
-                                reply.getCreationTimestamp() + Config.outOfOrdernessBound.toMilliseconds());
+                        context.timerService().registerEventTimeTimer(reply.getCreationTimestamp());
                     }
                     else if(currentKey.startsWith("p_")) { // solved the mapping
                         resolve(context, reply, currentKey);
@@ -182,7 +175,7 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
                         logger.error("Got to end of case Reply trying to resolve post id mappings: reply=[{}], currentKey={}", reply.toString(), currentKey);
                     }
 
-                    break;
+                    return;
                 }
 
                 default:
@@ -198,7 +191,8 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
             // except when the comment/reply id is part of the blacklisted ids.
             Activity.Reply reply = map.get(context.getCurrentKey());
 
-            String currentKey = "r_" + reply.getParentId();
+//            String currentKey = "r_" + reply.getParentId();
+            String currentKey = "r_" + reply.getId();
             do {
                 currentKey = (String) mc.get(currentKey);
             } while(currentKey != null && !currentKey.startsWith("p_"));
@@ -220,10 +214,9 @@ public class PostIdResolver extends TaskBase<Activity, Activity> {
         }
 
         private void resolve(Context context, Activity.Reply reply, String post) throws Exception {
-            String childId = "r_" + reply.getSelfId();
-            Future<Boolean> setRequest = mc.set(childId, 0, post);
-            while(!setRequest.isDone());
-            if(!setRequest.get()) {
+            String childId = "r_" + reply.getId();
+            boolean setRequest = mc.set(childId, 0, post).get();
+            if(!setRequest) {
                 logger.error("set request {} -> {} returned false", childId, post);
             }
             reply.setPostId(Integer.valueOf(post.substring(2)));

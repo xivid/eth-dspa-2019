@@ -1,6 +1,5 @@
 package socialnetwork;
 
-import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -8,9 +7,10 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import socialnetwork.util.Activity;
 import socialnetwork.util.Config;
 
-import java.io.*;
-import java.rmi.server.ExportException;
-import java.text.ParseException;
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 
@@ -18,9 +18,9 @@ import static socialnetwork.util.Config.*;
 
 public class Producer {
 
-    static TreeMap<Long, ArrayList<Activity>> readCleanedStreams() throws IOException {
-        TreeMap<Long, ArrayList<Activity>> map = new TreeMap<>();
-        final String[] files = Config.getStreamInputFiles();
+    public static TreeMap<Long, List<Activity>> readCleanedStreams(boolean inOrder, int lateness) throws IOException {
+        TreeMap<Long, List<Activity>> map = new TreeMap<>();
+        final String[] files = Config.getStreamCleanedInputFiles();
         final String[] prefixs = Config.getStreamPrefixs();
         Random random = new Random();
 
@@ -31,27 +31,29 @@ public class Producer {
             String line;
             while ((line = reader.readLine()) != null) {
                 Activity record = Activity.fromString(prefixs[i] + line);
-                long random_delay = random.nextInt((int) outOfOrdernessBound.toMilliseconds());
-                long delayed_timestamp = record.getCreationTimestamp() + random_delay;
-                if (!map.containsKey(delayed_timestamp)) {
-                    map.put(delayed_timestamp, new ArrayList<>());
+                long outputTimestamp = record.getCreationTimestamp();
+                if (!inOrder) {
+                    outputTimestamp += random.nextInt(lateness);
                 }
-                map.get(delayed_timestamp).add(record);
+                if (!map.containsKey(outputTimestamp)) {
+                    map.put(outputTimestamp, new ArrayList<>());
+                }
+                map.get(outputTimestamp).add(record);
             }
         }
         System.out.println("Finished reading all activities.\n");
         return map;
     }
 
-    static void produceToKafka(KafkaProducer<String, String> producer, TreeMap<Long, ArrayList<Activity>> allActivitiesByTimestamp) {
+    private static void produceToKafka(KafkaProducer<String, String> producer, TreeMap<Long, List<Activity>> allActivitiesByTimestamp) {
         try {
             System.out.println(String.format("Producing %s proportionally to Kafka topic %s...\n", Config.produceInOrder ? "in order" : "out of order", Config.allActivitiesTopic));
             long numberOfSentRecords = 0;
 
-            Map.Entry<Long, ArrayList<Activity>> entry = allActivitiesByTimestamp.pollFirstEntry();
+            Map.Entry<Long, List<Activity>> entry = allActivitiesByTimestamp.pollFirstEntry();
             while (entry != null) {
                 long this_time = entry.getKey();
-                ArrayList<Activity> list = entry.getValue();
+                List<Activity> list = entry.getValue();
 
                 // send activities assigned to this key (timestamp)
                 for(Activity t : list) {
@@ -94,7 +96,7 @@ public class Producer {
         props.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         KafkaProducer<String, String> producer = new KafkaProducer<>(props);
 
-        final TreeMap<Long, ArrayList<Activity>> allActivitiesByTimestamp = readCleanedStreams();
+        final TreeMap<Long, List<Activity>> allActivitiesByTimestamp = readCleanedStreams(produceInOrder, (int) outOfOrdernessBound.toMilliseconds());
         produceToKafka(producer, allActivitiesByTimestamp);
     }
 }

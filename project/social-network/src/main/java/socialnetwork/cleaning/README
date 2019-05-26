@@ -1,0 +1,2 @@
+Use OrderedFileGenerator to clean the 1k dataset. It corrects all timestamps without deleting anything.
+Use StreamsCleaner to clean the 10k dataset, because it's too large to be processed by OrderedFileGenerator. This will simply remove all activities with wrong timestamps.

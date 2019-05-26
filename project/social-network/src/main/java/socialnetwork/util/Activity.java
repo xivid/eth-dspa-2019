@@ -1,6 +1,5 @@
 package socialnetwork.util;
 
-import com.esotericsoftware.kryo.NotNull;
 import org.apache.flink.api.common.serialization.AbstractDeserializationSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,13 +41,15 @@ public abstract class Activity {
     String creationDate;
     Long creationTimestamp;
 
-    void setCreationDate(String s) {
+    public void setCreationDate(String s) {
         // Ref: https://docs.oracle.com/javase/8/docs/api/java/time/format/DateTimeFormatter.html#patterns
         this.creationDate = s;
         this.creationTimestamp = LocalDateTime
                 .from(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.S][S][S][X][X]").parse(s))
                 .atZone(ZoneId.of("GMT+0")).toInstant().toEpochMilli();
     }
+
+    public String getCreationDate() { return creationDate; }
 
     public Long getCreationTimestamp() {
         return creationTimestamp;
@@ -82,6 +83,8 @@ public abstract class Activity {
         return postId;
     }
 
+    public abstract Integer getId();
+
     public boolean isCommentOrReply() {
         return this instanceof Comment;  // Reply is also a subclass of Comment
     }
@@ -105,6 +108,8 @@ public abstract class Activity {
             return false;
         }
     }
+
+    public abstract String getRawString();
 
     /**
      Format:
@@ -137,8 +142,19 @@ public abstract class Activity {
 
         public String toString() {
             return "P|" + postId + "|" + personId + "|" + creationDate + "|" + imageFile + "|" + locationIP + "|"
-                    + browserUsed + "|" + language + "|" + content + "|" + tags + "|" + forumId + "|" + placeId
-                    + "|" + creationTimestamp;
+                    + browserUsed + "|" + language + "|" + content + "|" + tags + "|" + forumId + "|" + placeId;
+        }
+
+        public Integer getId() {
+            return postId;
+        }
+
+        public String getContent() { return content; }
+
+        @Override
+        public String getRawString() {
+            String s = this.toString();
+            return s.substring(2);
         }
     }
 
@@ -152,6 +168,7 @@ public abstract class Activity {
         String browserUsed;
         String content;
         Integer placeId;
+
 
         Comment(String[] splits, Integer postId) {
             this.commentId = Integer.valueOf(splits[1]);
@@ -175,7 +192,7 @@ public abstract class Activity {
             return new Comment(splits);
         }
 
-        public Integer getSelfId() {
+        public Integer getId() {
             return commentId;
         }
 
@@ -183,9 +200,17 @@ public abstract class Activity {
             return postId;
         }
 
+        public String getContent() { return content; }
+
         public String toString() {
              return "C|" + commentId + "|" + personId + "|" + creationDate + "|" + locationIP + "|" + browserUsed
-                     + "|" + content + "|" + postId + "||" + placeId + "|" + creationTimestamp;
+                     + "|" + content + "|" + postId + "||" + placeId;
+        }
+
+        @Override
+        public String getRawString() {
+            String s = this.toString();
+            return s.substring(2);
         }
     }
 
@@ -225,7 +250,14 @@ public abstract class Activity {
 
         public String toString() {
             return "C|" + commentId + "|" + personId + "|" + creationDate + "|" + locationIP + "|" + browserUsed
-                    + "|" + content + "||" + parentId + "|" + placeId + "|" + creationTimestamp;
+                    + "|" + content + "|" + (isPostIdResolved() ? postId : "") + "|" + parentId
+                    + "|" + placeId;
+        }
+
+        @Override
+        public String getRawString() {
+            String s = this.toString();
+            return s.substring(2);
         }
     }
 
@@ -242,7 +274,17 @@ public abstract class Activity {
         }
 
         public String toString() {
-            return "L|" + personId + "|" + postId + "|" + creationDate + "|" + creationTimestamp;
+            return "L|" + personId + "|" + postId + "|" + creationDate;
+        }
+
+        public Integer getId() {
+            return postId;
+        }
+
+        @Override
+        public String getRawString() {
+            String s = this.toString();
+            return s.substring(2);
         }
     }
 
@@ -263,7 +305,17 @@ public abstract class Activity {
         }
 
         public String toString() {
-            return "T|" + postId + "|" + creationDate + "|" + creationTimestamp;
+            return "T|" + postId + "|" + creationDate;
+        }
+
+        @Override
+        public String getRawString() {
+            String s = this.toString();
+            return s.substring(2);
+        }
+
+        public Integer getId() {
+            return postId;
         }
     }
 }

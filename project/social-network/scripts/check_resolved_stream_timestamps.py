@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-lines = open("resolved_stream.txt", "r").readlines()
+lines = open("../log/resolved_stream.txt", "r").readlines()
 fout = open("wrong_timestamps.txt", "w")
 cvt = lambda x: x[:10] + "T" + x[11:19]
 for line in lines:

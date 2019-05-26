@@ -8,15 +8,16 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer011;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import socialnetwork.task.activepost.ActivePostStatistician;
+import socialnetwork.task.anomalydetection.AnomalousUserDetector;
 import socialnetwork.task.postidresolution.PostIdResolver;
+import socialnetwork.task.recommendation.FriendRecommender;
 import socialnetwork.util.Activity;
 import socialnetwork.util.Config;
 
 import java.util.Properties;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class SocialNetwork {
     final static Logger logger = LoggerFactory.getLogger("SocialNetwork");
@@ -32,19 +33,20 @@ public class SocialNetwork {
 
         logger.info("Building Dataflow: Resolve postId");
         PostIdResolver postIdResolver = new PostIdResolver();
-        SingleOutputStreamOperator<Activity> postIdResolvedAllActivitiesStream = postIdResolver.buildPipeline(env, allActivitiesStream);
+        postIdResolver.buildPipeline(env, allActivitiesStream);
+        SingleOutputStreamOperator<Activity> postIdResolvedAllActivitiesStream = postIdResolver.getResolvedStream();
 
         logger.info("Building Dataflow: Task 1 Active Post Statistics");
         ActivePostStatistician task1 = new ActivePostStatistician();
         task1.buildPipeline(env, postIdResolvedAllActivitiesStream);
 
-//        logger.info("Building Dataflow: Task 2 Friend Recommendation");
-//        FriendRecommender task2 = new FriendRecommender();
-//        task2.buildPipeline(env, allActivitiesStream);
-//        task2.buildTestPipeline(env);
+        logger.info("Building Dataflow: Task 2 Friend Recommendation");
+        FriendRecommender task2 = new FriendRecommender();
+        task2.buildPipeline(env, postIdResolvedAllActivitiesStream);
 
-//        logger.info("Building Dataflow: Task 3 Unusual Activity Detection");
-        // TODO task 3
+        logger.info("Building Dataflow: Task 3 Unusual Activity Detection");
+        AnomalousUserDetector task3 = new AnomalousUserDetector();
+        task3.buildPipeline(env, postIdResolvedAllActivitiesStream);
 
         env.execute("Social Network");
     }
@@ -73,14 +75,15 @@ public class SocialNetwork {
         FlinkKafkaConsumer011<Activity> consumer =
                 new FlinkKafkaConsumer011<>(Config.allActivitiesTopic, new Activity.Deserializer(), kafkaProps);
         consumer.setStartFromEarliest();
+        consumer.assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
+            @Override
+            public long extractTimestamp(Activity a) {
+                return a.getCreationTimestamp();
+            }
+        });
         return env
             .addSource(consumer)
-            .setParallelism(Integer.min(Config.numKafkaPartitions, Config.flinkParallelism))
-            .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor<Activity>(Config.outOfOrdernessBound) {
-                public long extractTimestamp(Activity a) {
-                    return a.getCreationTimestamp();
-                }
-            });
+            .setParallelism(Integer.min(Config.numKafkaPartitions, Config.flinkParallelism));
     }
 
 }
