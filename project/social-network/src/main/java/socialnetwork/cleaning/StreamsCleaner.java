@@ -23,7 +23,7 @@ class StreamsCleaner {
     private static void generate() throws IOException {
         System.out.println("Working Directory = " + System.getProperty("user.dir"));
         String[] rawFilesNames = Config.getStreamRawInputFiles();
-        final BufferedReader commentsInputFile = Helpers.getFileReader(rawFilesNames[0]);
+        BufferedReader commentsInputFile = Helpers.getFileReader(rawFilesNames[0]);
         final BufferedReader likesInputFile = Helpers.getFileReader(rawFilesNames[1]);
         final BufferedReader postsInputFile = Helpers.getFileReader(rawFilesNames[2]);
 
@@ -87,7 +87,6 @@ class StreamsCleaner {
         final Map<String, Long> commentTimes = new HashMap<>();
 
         commentsInputFile.readLine();
-        commentsOutputFile.write("id|personId|creationDate|locationIP|browserUsed|content|reply_to_postId|reply_to_commentId|placeId\n");
         int lineCount = 0;
         while ((line = commentsInputFile.readLine()) != null) {
             if(++lineCount % 100000 == 0) {
@@ -110,6 +109,7 @@ class StreamsCleaner {
             parents.add(parentId);
         }
 
+        commentsInputFile.close();
         System.out.println("lines read = " + NumberFormat.getNumberInstance(Locale.UK).format(lineCount));
 
         final Map<String, Set<String>> commentMap = new HashMap<>(1000000);
@@ -146,13 +146,17 @@ class StreamsCleaner {
                     currentKeyTimestamp = commentTimes.get(currentKey);
                 }
 
-                if(currentKeyTimestamp > prevKeyTimestamp) {
+                if(currentKeyTimestamp >= prevKeyTimestamp) {
                     violatedOrdering = true;
                 }
             } while(!currentKey.startsWith("p_"));
 
             // currentKey == post_id
             // prevKey == comment_id
+            if(commentTimes.get(prevKey) <= postMap.get(Integer.parseInt(currentKey.substring(2)))) {
+                violatedOrdering = true;
+            }
+
             commentMap.putIfAbsent(prevKey, new HashSet<>());
             commentMap.get(prevKey).addAll(traversalIds);
             if(violatedOrdering) {
@@ -165,6 +169,9 @@ class StreamsCleaner {
             toDelete.add(commentId);
             toDelete.addAll(commentMap.get(commentId));
         }
+
+        commentsInputFile = Helpers.getFileReader(rawFilesNames[0]);
+        assert commentsInputFile != null;
 
         commentsInputFile.readLine();
         commentsOutputFile.write("id|personId|creationDate|locationIP|browserUsed|content|reply_to_postId|reply_to_commentId|placeId\n");
@@ -180,7 +187,7 @@ class StreamsCleaner {
             String childId = String.format("r_%d", Integer.parseInt(fields[0]));
 
             if(toDelete.contains(childId)) {
-                if(++deleted % 10000 == 0) {
+                if(++deleted % 100000 == 0) {
                     System.out.println("Deleted = " + NumberFormat.getNumberInstance(Locale.UK).format(deleted));
                 }
                 continue;
