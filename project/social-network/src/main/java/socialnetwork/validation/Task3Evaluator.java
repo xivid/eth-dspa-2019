@@ -87,7 +87,6 @@ public class Task3Evaluator {
             }
         }
 
-
         try {
             writer.write(output.toString());
             writer.flush();
