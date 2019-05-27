@@ -126,86 +126,185 @@ But the sizes are slightly larger than the non-incremental case, with a minimum 
 
 ## III. Re-configure the application from a savepoint
 
+### Task 1
 ```java
+public static void main(String[] args) throws Exception {
+    // set up the streaming execution environment
+    final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    RocksDBStateBackend backend = new RocksDBStateBackend("file:///Users/Xivid/repo/eth-dspa-2019/session-9/rocks.db", true);
+    env.setStateBackend(backend);
+    // Set a fixed delay restart strategy with a maximum of 5 restart attempts
+    // and a 1s interval between retries
+    env.setRestartStrategy(RestartStrategies.fixedDelayRestart(5, 1000));
 
-	public static void main(String[] args) throws Exception {
-		// set up the streaming execution environment
-		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        RocksDBStateBackend backend = new RocksDBStateBackend("file:///Users/Xivid/repo/eth-dspa-2019/session-9/rocks.db", true);
-        env.setStateBackend(backend);
-		// Set a fixed delay restart strategy with a maximum of 5 restart attempts
-		// and a 1s interval between retries
-		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(5, 1000));
+    // Take a checkpoint every 10s
+    env.enableCheckpointing(10000);
 
-		// Take a checkpoint every 10s
-		env.enableCheckpointing(10000);
+    Properties kafkaProps = new Properties();
+    kafkaProps.setProperty("zookeeper.connect", "localhost:2181");
+    kafkaProps.setProperty("bootstrap.servers", "localhost:9092");
+    kafkaProps.setProperty("group.id", "test-consumer-group");
+    kafkaProps.setProperty("enable.auto.commit", "false");
+    // always read the Kafka topic from the start
+    kafkaProps.setProperty("auto.offset.reset", "earliest");
+    DataStream<Tuple2<String, Integer>> edits = env
+            .addSource(new FlinkKafkaConsumer011<>("wiki-edits",
+                    new CustomDeserializationSchema(), kafkaProps))
+            .uid("source")
+            .shuffle()
+            .map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
+                @Override
+                public Tuple2<String, Integer> map(WikipediaEditEvent event) {
+                    return new Tuple2<>(
+                            event.getUser(), event.getByteDiff());
+                }
+            })
+            .uid("map");
 
-		Properties kafkaProps = new Properties();
-		kafkaProps.setProperty("zookeeper.connect", "localhost:2181");
-		kafkaProps.setProperty("bootstrap.servers", "localhost:9092");
-		kafkaProps.setProperty("group.id", "test-consumer-group");
-		kafkaProps.setProperty("enable.auto.commit", "false");
-		// always read the Kafka topic from the start
-		kafkaProps.setProperty("auto.offset.reset", "earliest");
-		DataStream<Tuple2<String, Integer>> edits = env
-				.addSource(new FlinkKafkaConsumer011<>("wiki-edits",
-						new CustomDeserializationSchema(), kafkaProps))
-				.setParallelism(1)
-				.map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
-					@Override
-					public Tuple2<String, Integer> map(WikipediaEditEvent event) {
-						return new Tuple2<>(
-								event.getUser(), event.getByteDiff());
-					}
-				});
+    DataStream<Tuple2<String, Integer>> results = edits
+        // group by user
+        .keyBy(0)
+        .flatMap(new ComputeDiffs()).setParallelism(2)
+        .uid("flatmap");
+    results.print().setParallelism(1);
 
-		DataStream<Tuple2<String, Double>> results = edits
-			// group by user
-			.keyBy(0)
-			.flatMap(new ComputeDiffs()).setParallelism(2);
-		results.print().setParallelism(1);
+    // execute program
+    env.execute("Flink Streaming Java API Skeleton");
+}
 
-		// execute program
-		env.execute("Flink Streaming Java API Skeleton");
-	}
+// Keep track of user byte diffs by key
+public static final class ComputeDiffs extends RichFlatMapFunction<
+        Tuple2<String, Integer>, Tuple2<String, Integer>> {
 
-	// Keep track of user byte diffs in a HashMap
-	public static final class ComputeDiffs extends RichFlatMapFunction<
-				Tuple2<String, Integer>, Tuple2<String, Double>> {
+    // actually it would suffice to use ValueState<Integer>, because we don't really need to store the user name (which is the key)
+    private transient ValueState<Tuple2<String, Integer>> diffs;
 
-		// user -> diffs
-        private transient ValueState<Tuple2<String, Integer>> diffs;
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
+                new ValueStateDescriptor<Tuple2<String, Integer>>(
+                        "diffs",
+                        TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
+                        Tuple2.of("", 0)
+                );
+        diffs = getRuntimeContext().getState(descriptor);
+    }
 
-		@Override
-		public void open(Configuration parameters) throws Exception {
-            ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
-                    new ValueStateDescriptor<Tuple2<String, Integer>>(
-                            "diffs",
-                            TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
-                            Tuple2.of("", 0)
-                    );
-            diffs = getRuntimeContext().getState(descriptor);
-		}
+    @Override
+    public void flatMap(Tuple2<String, Integer> in,
+                        Collector<Tuple2<String, Integer>> out) throws Exception {
+        String user = in.f0;
+        int diff = in.f1;
+        Tuple2<String, Integer> currentDiff = diffs.value();
 
-		@Override
-		public void flatMap(Tuple2<String, Integer> in,
-							Collector<Tuple2<String, Double>> out) throws Exception {
-			String user = in.f0;
-			int diff = in.f1;
-            Tuple2<String, Integer> currentDiff = diffs.value();
+        // the key should always be the same here, so this can be eliminated ...
+        currentDiff.f0 = user;
+        currentDiff.f1 += diff;
 
-            currentDiff.f0 = user;
-            currentDiff.f1 += diff;
-
-			out.collect(new Tuple2<String, Double>(currentDiff.f0, currentDiff.f1 / 1024.0));
-		}
-	}
+        // ... and we can out.collect(new Tuple2<String, Integer> (user, new diff value))
+        out.collect(currentDiff);
+    }
+}
 ```
 
-### Task 1
-(add screenshot)
+In​ `flink-conf.yaml`​ set the parameter: `state.savepoints.dir: file:///Users/Xivid/repo/eth-dspa-2019/flink-checkpoints`.
 
-![incremental](incremental.png)
+The job was initially started with parallelism 4.
+![](1.png)
+
+First, cancel the job with a savepoint:
+![](2.png)
+
+Then, restore from the savepoint
+![](2.5.png)
+
+Restored with parallelism 2 for flatMap:
+![](3.png)
 
 ### Task 2
-The counters are correctly printed in KB, including those restored from the savepoint!
+
+To output MB instead of KB:
+```java
+public static void main(String[] args) throws Exception {
+    // set up the streaming execution environment
+    final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    RocksDBStateBackend backend = new RocksDBStateBackend("file:///Users/Xivid/repo/eth-dspa-2019/session-9/rocks.db", true);
+    env.setStateBackend(backend);
+    // Set a fixed delay restart strategy with a maximum of 5 restart attempts
+    // and a 1s interval between retries
+    env.setRestartStrategy(RestartStrategies.fixedDelayRestart(5, 1000));
+
+    // Take a checkpoint every 10s
+    env.enableCheckpointing(10000);
+
+    Properties kafkaProps = new Properties();
+    kafkaProps.setProperty("zookeeper.connect", "localhost:2181");
+    kafkaProps.setProperty("bootstrap.servers", "localhost:9092");
+    kafkaProps.setProperty("group.id", "test-consumer-group");
+    kafkaProps.setProperty("enable.auto.commit", "false");
+    // always read the Kafka topic from the start
+    kafkaProps.setProperty("auto.offset.reset", "earliest");
+    DataStream<Tuple2<String, Integer>> edits = env
+            .addSource(new FlinkKafkaConsumer011<>("wiki-edits",
+                    new CustomDeserializationSchema(), kafkaProps))
+            .uid("source")
+            .shuffle()
+            .map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
+                @Override
+                public Tuple2<String, Integer> map(WikipediaEditEvent event) {
+                    return new Tuple2<>(
+                            event.getUser(), event.getByteDiff());
+                }
+            })
+            .uid("map");
+
+    DataStream<Tuple2<String, Double>> results = edits
+        // group by user
+        .keyBy(0)
+        .flatMap(new ComputeDiffs()).setParallelism(2)
+        .uid("flatmap");
+    results.print().setParallelism(1);
+
+    // execute program
+    env.execute("Flink Streaming Java API Skeleton");
+}
+
+// Keep track of user byte diffs in a HashMap
+public static final class ComputeDiffs extends RichFlatMapFunction<
+        Tuple2<String, Integer>, Tuple2<String, Double>> {
+
+    // user -> diffs
+    private transient ValueState<Tuple2<String, Integer>> diffs;
+
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
+                new ValueStateDescriptor<Tuple2<String, Integer>>(
+                        "diffs",
+                        TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
+                        Tuple2.of("", 0)
+                );
+        diffs = getRuntimeContext().getState(descriptor);
+    }
+
+    @Override
+    public void flatMap(Tuple2<String, Integer> in,
+                        Collector<Tuple2<String, Double>> out) throws Exception {
+        String user = in.f0;
+        int diff = in.f1;
+        Tuple2<String, Integer> currentDiff = diffs.value();
+
+        currentDiff.f0 = user;
+        currentDiff.f1 += diff;
+
+        out.collect(new Tuple2<String, Double>(currentDiff.f0, currentDiff.f1 / 1024.0));
+    }
+}
+```
+
+Now restore again:
+![](4.png)
+
+Compare the output before and after:
+![](6.png)
+The counters are correctly printed in KB, including those restored from the savepoint. (The order is different due to the parallelism of the FlatMap operator.)

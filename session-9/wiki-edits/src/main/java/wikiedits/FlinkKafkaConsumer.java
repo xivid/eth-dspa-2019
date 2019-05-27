@@ -82,19 +82,22 @@ public class FlinkKafkaConsumer {
 		DataStream<Tuple2<String, Integer>> edits = env
 				.addSource(new FlinkKafkaConsumer011<>("wiki-edits",
 						new CustomDeserializationSchema(), kafkaProps))
-				.setParallelism(1)
+				.uid("source")
+				.shuffle()
 				.map(new MapFunction<WikipediaEditEvent, Tuple2<String, Integer>>() {
 					@Override
 					public Tuple2<String, Integer> map(WikipediaEditEvent event) {
 						return new Tuple2<>(
 								event.getUser(), event.getByteDiff());
 					}
-				});
+				})
+				.uid("map");
 
 		DataStream<Tuple2<String, Double>> results = edits
 			// group by user
 			.keyBy(0)
-			.flatMap(new ComputeDiffs()).setParallelism(2);
+			.flatMap(new ComputeDiffs()).setParallelism(2)
+			.uid("flatmap");
 		results.print().setParallelism(1);
 
 		// execute program
@@ -103,20 +106,20 @@ public class FlinkKafkaConsumer {
 
 	// Keep track of user byte diffs in a HashMap
 	public static final class ComputeDiffs extends RichFlatMapFunction<
-				Tuple2<String, Integer>, Tuple2<String, Double>> {
+			Tuple2<String, Integer>, Tuple2<String, Double>> {
 
 		// user -> diffs
-        private transient ValueState<Tuple2<String, Integer>> diffs;
+		private transient ValueState<Tuple2<String, Integer>> diffs;
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
-            ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
-                    new ValueStateDescriptor<Tuple2<String, Integer>>(
-                            "diffs",
-                            TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
-                            Tuple2.of("", 0)
-                    );
-            diffs = getRuntimeContext().getState(descriptor);
+			ValueStateDescriptor<Tuple2<String, Integer>> descriptor =
+					new ValueStateDescriptor<Tuple2<String, Integer>>(
+							"diffs",
+							TypeInformation.of(new TypeHint<Tuple2<String, Integer>>() {}),
+							Tuple2.of("", 0)
+					);
+			diffs = getRuntimeContext().getState(descriptor);
 		}
 
 		@Override
@@ -124,14 +127,15 @@ public class FlinkKafkaConsumer {
 							Collector<Tuple2<String, Double>> out) throws Exception {
 			String user = in.f0;
 			int diff = in.f1;
-            Tuple2<String, Integer> currentDiff = diffs.value();
+			Tuple2<String, Integer> currentDiff = diffs.value();
 
-            currentDiff.f0 = user;
-            currentDiff.f1 += diff;
+			currentDiff.f0 = user;
+			currentDiff.f1 += diff;
 
 			out.collect(new Tuple2<String, Double>(currentDiff.f0, currentDiff.f1 / 1024.0));
 		}
 	}
+
 
 	static class CustomDeserializationSchema extends AbstractDeserializationSchema<WikipediaEditEvent> {
 		@Override
