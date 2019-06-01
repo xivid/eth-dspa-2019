@@ -15,21 +15,20 @@ You should now be ready to start configuring and running the Producer and Flink 
 
 9. To configure the flink application, you need to additionally set the `flinkParallelism`. We recommend setting this to half the cores on your machine, as setting it higher risks starving memcached of cpu time, which can cause requests to time out. In a real production environment, this is not a problem as you could either put memcached on another machine, allocate more memcached instances, or configure it with more threads, but for simplicity we choose to just ensure it gets enough cpu time by reducing the contention. To enable the flink web UI to run whilst running flink from Intellij, ensure `useLocalEnvironmentWithWebUI` is set to true in the Config file.
 
+10. Task 2 also has some configuration optins. `eigenUserIds` is the 10 users to recommend friends for, and `staticWeight` is the weight given to static similarities. Both of these options have default values so don't need to be configured, but if you can change these default values if you wish.
+
 With the above configuration options set, everything should be ready to run.
 
-10. Run the Producer. You should see output that matches your configuration options e.g. "Producing out of order to Kafka topic all-multiple...".
+11. Run the Producer. You should see output that matches your configuration options e.g. "Producing out of order to Kafka topic all-multiple...".
 
-11. Now start the flink application. The main class is the SocialNetwork class. As we produce tombstone values at the end of our streams, flink will automatically stop running when it has processed all of the data.
+12. Now start the flink application. The main class is the SocialNetwork class. As we produce tombstone values at the end of our streams, flink will automatically stop running when it has processed all of the data.
 
 ## Tasks and result validation
-The implementations of all three tasks are under `social-network/src/main/java/socialnetwork/task`. For the purpose of validation, the programs `Task*Evaluator` under `social-network/src/main/java/socialnetwork/validation` can be run to generate the expected output by batch processing.
+The results of running the flink program will be written into the log directory. For task 1, we have `reply-counts.txt`, `comment-counts.txt` and `user-counts.txt`. For task 2, we have `recommendations.txt` and for task 3 we have `anomalies.txt`.
 
-## Data Preprocessing
-The project works with cleaned data. One can run the tools in `social-network/src/main/java/socialnetwork/cleaning` to clean the data. Set `use1KFiles` in config accordingly to clean the 1K or 10K streams.
+We have created a validation program for each of the three tasks. These programs can be found in the validation package. The validation programs compute the expected output for each task and write it to a file in the root working directory. The file will start with `expected-...` depending on the task. For example, the first task has `expected-comment-counts.txt`, `expected-reply-counts.txt` and `expected-user-counts.txt`.
 
-
-- `eigenUserIds`: the 10 users to recommend friends for in task 2.
-- `staticWeight`: weight of static similarities in task 2.
+For tasks 1 and 2, we test the expected vs actual results using a sorted diff: `diff -rupP <(sort actual-file) <(sort expected-file)`. You will know that the comparison is successful if nothing is output to the terminal. For task 3, we use the compare_users.py program which can be found in the scripts directory. You will know that the comparison is successful if "no difference" is printed.
 
 ## Authors
 Jack Clark, Zhifei Yang
